@@ -154,7 +154,7 @@ export default function AgentChatPanel() {
   const currentModels = Array.isArray(models[selectedProvider]) ? models[selectedProvider] : [];
 
   return (
-    <div className="flex flex-col h-[calc(100vh-12rem)]">
+    <div className="flex flex-col h-[calc(100vh-18rem)]">
       {/* Model Selector */}
       <div className="flex items-center gap-3 pb-4 mb-4 border-b border-gray-100">
         {providers.map((provider) => (
