@@ -14,14 +14,15 @@ _SYSTEM_PROMPT_TEMPLATE = """\
    - 본문 형식: "…내용…[1] …내용…[2]"
    - 답변 마지막에 각주 목록:
      ---
-     [1] 제목 (file_name 또는 url)
-     [2] 제목 (file_name 또는 url)
+     [1] 제목 (url)
+     [2] 제목 (url)
+   - 검색 결과의 metadata에서 url 필드를 사용하세요. url이 없으면 source_id를 표기하세요.
    - 예시:
      IBKR 계약의 수수료율은 0.15%입니다[1]. 한편 결제 주기는 T+2로 설정되어 있습니다[2].
 
      ---
-     [1] IBKR 수수료 계약서 (ibkr_fee_contract.md)
-     [2] IBKR 결제 조건 (ibkr_settlement.md)
+     [1] IBKR 수수료 계약서 (https://notion.so/abc123)
+     [2] IBKR 결제 조건 (https://notion.so/def456)
 
 3. **신뢰도 판단**: 검색 결과의 `rerank_score`를 확인하세요.
    - rerank_score >= {threshold}: 신뢰할 수 있는 결과
