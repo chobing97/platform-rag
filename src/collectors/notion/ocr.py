@@ -8,28 +8,20 @@ from urllib.parse import urlparse
 logger = logging.getLogger(__name__)
 
 _ocr_instance = None
-_ocr_available: bool | None = None
 
 
 def _get_ocr():
-    """PaddleOCR 인스턴스를 싱글톤으로 반환한다."""
-    global _ocr_instance, _ocr_available
-    if _ocr_available is False:
-        return None
-    if _ocr_instance is None:
-        try:
-            from paddleocr import PaddleOCR
+    """PaddleOCR 인스턴스를 싱글톤으로 반환한다.
 
-            _ocr_instance = PaddleOCR(lang="korean", use_angle_cls=True, show_log=False)
-            _ocr_available = True
-            logger.info("PaddleOCR 초기화 완료 (lang=korean)")
-        except ImportError:
-            _ocr_available = False
-            logger.warning(
-                "PaddleOCR가 설치되지 않았습니다. OCR 기능이 비활성화됩니다. "
-                "설치: pip install paddlepaddle paddleocr PyMuPDF"
-            )
-            return None
+    Raises:
+        ImportError: paddlepaddle 또는 paddleocr가 설치되지 않은 경우.
+    """
+    global _ocr_instance
+    if _ocr_instance is None:
+        from paddleocr import PaddleOCR
+
+        _ocr_instance = PaddleOCR(lang="korean", use_angle_cls=True, show_log=False)
+        logger.info("PaddleOCR 초기화 완료 (lang=korean)")
     return _ocr_instance
 
 
@@ -59,8 +51,6 @@ def download_file(url: str, save_path: str, timeout: int = 120) -> str | None:
 def extract_text_from_image(image_path: str) -> str:
     """이미지에서 OCR로 텍스트를 추출한다."""
     ocr = _get_ocr()
-    if ocr is None:
-        return ""
     try:
         result = ocr.ocr(image_path, cls=True)
         if not result or not result[0]:
@@ -75,8 +65,6 @@ def extract_text_from_image(image_path: str) -> str:
 def extract_text_from_pdf(pdf_path: str) -> str:
     """PDF에서 OCR로 텍스트를 추출한다."""
     ocr = _get_ocr()
-    if ocr is None:
-        return ""
     try:
         result = ocr.ocr(pdf_path, cls=True)
         if not result:
