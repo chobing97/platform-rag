@@ -20,7 +20,7 @@ def _get_ocr():
     if _ocr_instance is None:
         from paddleocr import PaddleOCR
 
-        _ocr_instance = PaddleOCR(lang="korean", use_angle_cls=True, show_log=False)
+        _ocr_instance = PaddleOCR(lang="korean", use_angle_cls=True)
         logger.info("PaddleOCR 초기화 완료 (lang=korean)")
     return _ocr_instance
 
