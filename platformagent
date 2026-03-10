@@ -1,0 +1,387 @@
+#!/bin/bash
+# Platform RAG — 서비스 실행 스크립트
+# 사용법: ./platformagent [명령]
+#
+#   ./platformagent start              전체 서비스 시작 (infra + api + mcp + web)
+#   ./platformagent stop               전체 서비스 중지
+#   ./platformagent restart            전체 서비스 재시작
+#   ./platformagent status             서비스 상태 확인
+#   ./platformagent infra [start|stop|restart]   인프라 (Qdrant, Ollama)
+#   ./platformagent api  [start|stop|restart]    FastAPI 검색 API (port 8000)
+#   ./platformagent mcp  [start|stop|restart]    MCP 서버 (port 3001)
+#   ./platformagent web  [start|stop|restart]    Next.js 검색 UI (port 3000)
+#   ./platformagent agent [--claude|--gemini] [-m MODEL]   AI Agent 대화형 모드
+#   ./platformagent agent-api [start|stop|restart|status]   Agent API 서버 (port 8001)
+#   ./platformagent sync               Notion 데이터 동기화
+
+set -e
+
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+LOG_DIR="$ROOT_DIR/logs"
+mkdir -p "$LOG_DIR"
+
+# 색상
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+info()  { echo -e "${CYAN}[INFO]${NC} $1"; }
+ok()    { echo -e "${GREEN}[OK]${NC}   $1"; }
+warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
+err()   { echo -e "${RED}[ERR]${NC}  $1"; }
+
+check_port() {
+    lsof -ti:"$1" > /dev/null 2>&1
+}
+
+kill_port() {
+    lsof -ti:"$1" 2>/dev/null | xargs kill 2>/dev/null || true
+    while check_port "$1"; do
+        sleep 1
+    done
+}
+
+# ─── Qdrant ────────────────────────────────────────────
+start_qdrant() {
+    if docker ps --format '{{.Names}}' | grep -q '^qdrant$'; then
+        ok "Qdrant 이미 실행 중 (port 6333)"
+    else
+        info "Qdrant 시작 중..."
+        docker start qdrant 2>/dev/null || \
+        docker run -d --name qdrant -p 6333:6333 -p 6334:6334 \
+            -v "$ROOT_DIR/data/qdrant_storage:/qdrant/storage" \
+            qdrant/qdrant
+        ok "Qdrant 시작됨 (port 6333)"
+    fi
+}
+
+stop_qdrant() {
+    docker stop qdrant 2>/dev/null && ok "Qdrant 중지됨" || true
+}
+
+status_qdrant() {
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^qdrant$'; then
+        printf "  %-14s  %-6s  ${GREEN}실행 중${NC}\n" "Qdrant" "6333"
+    else
+        printf "  %-14s  %-6s  ${RED}중지됨${NC}\n" "Qdrant" "6333"
+    fi
+}
+
+# ─── Ollama ────────────────────────────────────────────
+start_ollama() {
+    if check_port 11434; then
+        ok "Ollama 이미 실행 중 (port 11434)"
+    else
+        info "Ollama 시작 중..."
+        ollama serve > "$LOG_DIR/ollama.log" 2>&1 &
+        sleep 2
+        ok "Ollama 시작됨 (port 11434)"
+    fi
+}
+
+stop_ollama() {
+    kill_port 11434
+    ok "Ollama 중지됨"
+}
+
+status_ollama() {
+    if check_port 11434; then
+        printf "  %-14s  %-6s  ${GREEN}실행 중${NC}\n" "Ollama" "11434"
+    else
+        printf "  %-14s  %-6s  ${RED}중지됨${NC}\n" "Ollama" "11434"
+    fi
+}
+
+# ─── FastAPI ───────────────────────────────────────────
+start_api() {
+    if check_port 8000; then
+        ok "FastAPI 이미 실행 중 (port 8000)"
+    else
+        info "FastAPI 시작 중..."
+        cd "$ROOT_DIR/src/search"
+        MECABRC=/opt/homebrew/etc/mecabrc \
+            nohup .venv/bin/uvicorn api:app --host 0.0.0.0 --port 8000 \
+            > "$LOG_DIR/api.log" 2>&1 &
+        sleep 3
+        if check_port 8000; then
+            ok "FastAPI 시작됨 (port 8000)"
+        else
+            err "FastAPI 시작 실패 — $LOG_DIR/api.log 확인"
+        fi
+    fi
+}
+
+stop_api() {
+    kill_port 8000
+    ok "FastAPI 중지됨"
+}
+
+status_api() {
+    if check_port 8000; then
+        printf "  %-14s  %-6s  ${GREEN}실행 중${NC}\n" "FastAPI" "8000"
+    else
+        printf "  %-14s  %-6s  ${RED}중지됨${NC}\n" "FastAPI" "8000"
+    fi
+}
+
+# ─── MCP Server ────────────────────────────────────────
+start_mcp() {
+    if check_port 3001; then
+        ok "MCP Server 이미 실행 중 (port 3001)"
+    else
+        info "MCP Server 시작 중..."
+        cd "$ROOT_DIR/src/mcp-server"
+        nohup node dist/index.js > "$LOG_DIR/mcp.log" 2>&1 &
+        sleep 2
+        if check_port 3001; then
+            ok "MCP Server 시작됨 (port 3001)"
+        else
+            err "MCP Server 시작 실패 — $LOG_DIR/mcp.log 확인"
+        fi
+    fi
+}
+
+stop_mcp() {
+    kill_port 3001
+    ok "MCP Server 중지됨"
+}
+
+status_mcp() {
+    if check_port 3001; then
+        printf "  %-14s  %-6s  ${GREEN}실행 중${NC}\n" "MCP Server" "3001"
+    else
+        printf "  %-14s  %-6s  ${RED}중지됨${NC}\n" "MCP Server" "3001"
+    fi
+}
+
+# ─── Next.js ──────────────────────────────────────────
+start_web() {
+    if check_port 3000; then
+        ok "Web UI 이미 실행 중 (port 3000)"
+    else
+        info "Web UI 시작 중..."
+        cd "$ROOT_DIR/src/search-web"
+        nohup npm run dev > "$LOG_DIR/web.log" 2>&1 &
+        sleep 3
+        if check_port 3000; then
+            ok "Web UI 시작됨 (port 3000)"
+        else
+            err "Web UI 시작 실패 — $LOG_DIR/web.log 확인"
+        fi
+    fi
+}
+
+stop_web() {
+    kill_port 3000
+    ok "Web UI 중지됨"
+}
+
+status_web() {
+    if check_port 3000; then
+        printf "  %-14s  %-6s  ${GREEN}실행 중${NC}\n" "Web UI" "3000"
+    else
+        printf "  %-14s  %-6s  ${RED}중지됨${NC}\n" "Web UI" "3000"
+    fi
+}
+
+# ─── Agent API ────────────────────────────────────────
+start_agent_api() {
+    if check_port 8001; then
+        ok "Agent API 이미 실행 중 (port 8001)"
+    else
+        info "Agent API 시작 중..."
+        cd "$ROOT_DIR/src"
+        nohup agent/.venv/bin/python -m agent --serve --port 8001 \
+            > "$LOG_DIR/agent-api.log" 2>&1 &
+        sleep 3
+        if check_port 8001; then
+            ok "Agent API 시작됨 (port 8001)"
+        else
+            err "Agent API 시작 실패 — $LOG_DIR/agent-api.log 확인"
+        fi
+    fi
+}
+
+stop_agent_api() {
+    kill_port 8001
+    ok "Agent API 중지됨"
+}
+
+status_agent_api() {
+    if check_port 8001; then
+        printf "  %-14s  %-6s  ${GREEN}실행 중${NC}\n" "Agent API" "8001"
+    else
+        printf "  %-14s  %-6s  ${RED}중지됨${NC}\n" "Agent API" "8001"
+    fi
+}
+
+# ─── Sync ─────────────────────────────────────────────
+sync_notion() {
+    local mode="${1:-}"
+    cd "$ROOT_DIR/src/collectors"
+    if [ "$mode" = "--full" ]; then
+        info "Notion 전체 동기화 시작..."
+        .venv/bin/python -m notion.sync --full
+    else
+        info "Notion 증분 동기화 시작..."
+        .venv/bin/python -m notion.sync
+    fi
+    ok "Notion 동기화 완료"
+}
+
+sync_all() {
+    local mode="${1:-}"
+    sync_notion "$mode"
+    # sync_gmail "$mode"   # 구현 후 활성화
+    # sync_local "$mode"   # 구현 후 활성화
+}
+
+sync_help() {
+    echo ""
+    echo "  사용법: ./platformagent sync <소스> [--full]"
+    echo ""
+    echo "  all      전체 소스 동기화"
+    echo "  notion   Notion 데이터 동기화"
+    echo "  gmail    Gmail 데이터 동기화 (미구현)"
+    echo "  local    로컬 파일 동기화 (미구현)"
+    echo ""
+    echo "  옵션:"
+    echo "    --full   변경 여부와 관계없이 전체 재수집 (기본: 증분)"
+    echo ""
+    echo "  예시:"
+    echo "    ./platformagent sync notion        # 변경된 페이지만 수집"
+    echo "    ./platformagent sync notion --full   # 전체 페이지 재수집"
+    echo "    ./platformagent sync all           # 모든 소스 증분 동기화"
+    echo "    ./platformagent sync all --full      # 모든 소스 전체 재수집"
+    echo ""
+}
+
+# ─── Status ───────────────────────────────────────────
+show_status() {
+    echo ""
+    echo "  서비스          포트    상태"
+    echo "  ─────────────────────────────"
+
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^qdrant$'; then
+        echo -e "  Qdrant          6333    ${GREEN}실행 중${NC}"
+    else
+        echo -e "  Qdrant          6333    ${RED}중지됨${NC}"
+    fi
+
+    for svc_port in "Ollama:11434" "FastAPI:8000" "Agent API:8001" "MCP Server:3001" "Web UI:3000"; do
+        name="${svc_port%%:*}"
+        port="${svc_port##*:}"
+        if check_port "$port"; then
+            printf "  %-14s  %-6s  ${GREEN}실행 중${NC}\n" "$name" "$port"
+        else
+            printf "  %-14s  %-6s  ${RED}중지됨${NC}\n" "$name" "$port"
+        fi
+    done
+    echo ""
+}
+
+# ─── 서비스별 서브커맨드 처리 ─────────────────────────
+svc_cmd() {
+    local name="$1"
+    local action="${2:-status}"
+
+    case "$action" in
+        start)   "start_${name}" ;;
+        stop)    "stop_${name}" ;;
+        restart) "stop_${name}"; "start_${name}" ;;
+        status)  "status_${name}" ;;
+        *)
+            echo ""
+            echo "  사용법: ./platformagent $name [start|stop|restart|status]"
+            echo "  (기본: status)"
+            echo ""
+            ;;
+    esac
+}
+
+# ─── 전체 시작/중지/재시작 ────────────────────────────
+start_all() {
+    echo ""
+    info "=== Platform RAG 전체 서비스 시작 ==="
+    echo ""
+    start_qdrant
+    start_ollama
+    start_api
+    start_agent_api
+    start_mcp
+    start_web
+    echo ""
+    show_status
+}
+
+stop_all() {
+    echo ""
+    info "=== Platform RAG 전체 서비스 중지 ==="
+    echo ""
+    stop_web
+    stop_mcp
+    stop_agent_api
+    stop_api
+    stop_ollama
+    stop_qdrant
+    echo ""
+}
+
+restart_all() {
+    stop_all
+    start_all
+}
+
+# ─── Main ─────────────────────────────────────────────
+case "${1:-help}" in
+    start)   start_all ;;
+    stop)    stop_all ;;
+    restart) restart_all ;;
+    status)  show_status ;;
+    infra)
+        action="${2:-start}"
+        case "$action" in
+            start)   start_qdrant; start_ollama ;;
+            stop)    stop_ollama; stop_qdrant ;;
+            restart) stop_ollama; stop_qdrant; start_qdrant; start_ollama ;;
+            status)  status_qdrant; status_ollama ;;
+            *)       echo "  사용법: ./platformagent infra [start|stop|restart|status]" ;;
+        esac
+        ;;
+    api) svc_cmd api "${2:-status}" ;;
+    mcp) svc_cmd mcp "${2:-status}" ;;
+    web) svc_cmd web "${2:-status}" ;;
+    agent)
+        info "AI Agent 시작..."
+        shift
+        cd "$ROOT_DIR/src"
+        agent/.venv/bin/python -m agent "$@"
+        ;;
+    agent-api) svc_cmd agent_api "${2:-status}" ;;
+    sync)
+        case "${2:-}" in
+            all)    sync_all "${3:-}" ;;
+            notion) sync_notion "${3:-}" ;;
+            *)      sync_help ;;
+        esac
+        ;;
+    *)
+        echo ""
+        echo "  사용법: ./platformagent <명령> [옵션]"
+        echo ""
+        echo "  start              전체 서비스 시작"
+        echo "  stop               전체 서비스 중지"
+        echo "  restart            전체 서비스 재시작"
+        echo "  status             서비스 상태 확인"
+        echo "  infra [start|stop|restart|status]   인프라 (Qdrant, Ollama)"
+        echo "  api   [start|stop|restart|status]   FastAPI 검색 API (port 8000)"
+        echo "  mcp   [start|stop|restart|status]   MCP 서버 (port 3001)"
+        echo "  web   [start|stop|restart|status]   Next.js 검색 UI (port 3000)"
+        echo "  agent [--claude|--gemini] [-m MODEL]   AI Agent 대화형 모드"
+        echo "  agent-api [start|stop|restart|status]   Agent API 서버 (port 8001)"
+        echo "  sync               데이터 동기화 (./platformagent sync notion)"
+        echo ""
+        ;;
+esac

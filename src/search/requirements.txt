@@ -1,0 +1,7 @@
+qdrant-client
+rank-bm25
+fastapi
+uvicorn[standard]
+httpx
+sentence-transformers
+mecab-python3
