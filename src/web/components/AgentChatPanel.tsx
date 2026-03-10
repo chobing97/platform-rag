@@ -108,6 +108,12 @@ export default function AgentChatPanel() {
                 { role: "assistant", content: data.text },
               ]);
               setStatusEvents([]);
+            } else if (data.type === "error") {
+              setMessages((prev) => [
+                ...prev,
+                { role: "assistant", content: `오류: ${data.message}` },
+              ]);
+              setStatusEvents([]);
             } else {
               setStatusEvents((prev) => [...prev, data as StatusEvent]);
             }
