@@ -162,7 +162,7 @@ start_web() {
         ok "Web UI 이미 실행 중 (port 3000)"
     else
         info "Web UI 시작 중..."
-        cd "$ROOT_DIR/src/search-web"
+        cd "$ROOT_DIR/src/web"
         nohup npm run dev > "$LOG_DIR/web.log" 2>&1 &
         sleep 3
         if check_port 3000; then

@@ -34,7 +34,7 @@ platform-rag/
 ├── src/
 │   ├── collectors/    # Python — Notion 수집기
 │   ├── search/        # Python — FastAPI + Hybrid Search
-│   ├── search-web/    # Next.js — 검색 UI + AI Agent 채팅
+│   ├── web/           # Next.js — 검색 UI + AI Agent 채팅
 │   ├── mcp-server/    # TypeScript — MCP Server
 │   └── agent/         # Python — AI Agent (Claude/Gemini 듀얼 LLM)
 ├── data/              # 공유 데이터 (notion/, DB 파일들)
@@ -60,7 +60,7 @@ platform-rag/
 cd src/collectors && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 cd src/search     && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 cd src/agent      && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
-cd src/search-web && npm install
+cd src/web && npm install
 ```
 
 ### Agent 환경변수 설정

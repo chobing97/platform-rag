@@ -163,7 +163,7 @@ export default function McpTestPanel() {
       const initRes = await rpc("initialize", {
         protocolVersion: "2024-11-05",
         capabilities: {},
-        clientInfo: { name: "search-web-mcp-client", version: "0.1.0" },
+        clientInfo: { name: "web-mcp-client", version: "0.1.0" },
       });
 
       const result = initRes.result as {

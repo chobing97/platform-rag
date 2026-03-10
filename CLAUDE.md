@@ -15,7 +15,7 @@ platform rag/
 ├── src/
 │   ├── collectors/    # Python — Notion 수집기 (own .venv)
 │   ├── search/        # Python — FastAPI + Hybrid Search (own .venv)
-│   ├── search-web/    # Next.js — 검색 UI (own node_modules)
+│   ├── web/           # Next.js — 검색 UI (own node_modules)
 │   ├── mcp-server/    # TypeScript — MCP Server
 │   └── agent/         # Python — AI Agent, Claude/Gemini 듀얼 LLM (own .venv)
 ├── data/              # 공유 데이터 (notion/, DB 파일들)
