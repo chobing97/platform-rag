@@ -98,12 +98,20 @@ def _embed_query(query: str) -> list[float]:
     return response.json()["embeddings"][0]
 
 
-def _vector_search(query_vec: list[float], top_k: int) -> list[dict]:
+def _vector_search(query_vec: list[float], top_k: int, source_type: str | None = None) -> list[dict]:
     """Qdrant 벡터 검색."""
+    from qdrant_client.models import FieldCondition, Filter, MatchValue
+
     client = QdrantClient(url=QDRANT_URL)
+    query_filter = None
+    if source_type:
+        query_filter = Filter(
+            must=[FieldCondition(key="source_type", match=MatchValue(value=source_type))]
+        )
     results = client.query_points(
         collection_name=QDRANT_COLLECTION,
         query=query_vec,
+        query_filter=query_filter,
         limit=top_k,
         with_payload=True,
     )
@@ -118,23 +126,28 @@ def _vector_search(query_vec: list[float], top_k: int) -> list[dict]:
     ]
 
 
-def _bm25_search(query: str, top_k: int) -> list[dict]:
+def _bm25_search(query: str, top_k: int, source_type: str | None = None) -> list[dict]:
     """BM25 키워드 검색."""
     _load_bm25()
     tokens = _tokenize(query)
     scores = _bm25_index.get_scores(tokens)
 
-    top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
-    return [
-        {
+    top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+    results = []
+    for i in top_indices:
+        if scores[i] <= 0:
+            break
+        if source_type and _bm25_corpus[i]["metadata"].get("source_type") != source_type:
+            continue
+        results.append({
             "id": _bm25_corpus[i]["id"],
             "text": _bm25_corpus[i]["text"],
             "metadata": _bm25_corpus[i]["metadata"],
             "score": float(scores[i]),
-        }
-        for i in top_indices
-        if scores[i] > 0
-    ]
+        })
+        if len(results) >= top_k:
+            break
+    return results
 
 
 def _rrf_fusion(vector_results: list[dict], bm25_results: list[dict], k: int = RRF_K) -> list[dict]:
@@ -281,10 +294,10 @@ def get_related(doc_id: str, top_k: int = 5) -> list[dict]:
     ][:top_k]
 
 
-def search(query: str, top_k: int = TOP_K_RERANK, use_reranker: bool = True) -> dict:
+def search(query: str, top_k: int = TOP_K_RERANK, use_reranker: bool = True, source_type: str | None = None) -> dict:
     """Hybrid Search 전체 파이프라인. 결과와 성능 정보를 반환한다."""
     import time
-    logger.info("검색 쿼리: %s", query)
+    logger.info("검색 쿼리: %s (source_type=%s)", query, source_type or "all")
     timings: dict[str, float] = {}
 
     # 1. 임베딩
@@ -294,12 +307,12 @@ def search(query: str, top_k: int = TOP_K_RERANK, use_reranker: bool = True) -> 
 
     # 2. 벡터 검색
     t = time.time()
-    vector_results = _vector_search(query_vec, TOP_K_RETRIEVAL)
+    vector_results = _vector_search(query_vec, TOP_K_RETRIEVAL, source_type=source_type)
     timings["vector_search"] = time.time() - t
 
     # 3. BM25 검색
     t = time.time()
-    bm25_results = _bm25_search(query, TOP_K_RETRIEVAL)
+    bm25_results = _bm25_search(query, TOP_K_RETRIEVAL, source_type=source_type)
     timings["bm25_search"] = time.time() - t
 
     logger.info("Vector: %d건, BM25: %d건", len(vector_results), len(bm25_results))

@@ -8,6 +8,8 @@ from config import CHUNK_OVERLAP, CHUNK_SIZE, NOTION_DIR
 
 logger = logging.getLogger(__name__)
 
+_MARKER_RE = re.compile(r"^<!-- @source_type:(\w+)(?::(.+?))? -->$")
+
 
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
     """YAML frontmatter를 파싱하여 메타데이터와 본문을 분리한다."""
@@ -27,29 +29,39 @@ def _parse_frontmatter(text: str) -> tuple[dict, str]:
 
 
 def _split_by_headings(body: str) -> list[dict]:
-    """Markdown 본문을 헤딩 기준으로 섹션 분할한다."""
+    """Markdown 본문을 헤딩·소스 타입 마커 기준으로 섹션 분할한다."""
     sections = []
     current_heading = ""
-    current_lines = []
+    current_lines: list[str] = []
+    current_source_type = "document"
+    current_source_file = ""
+
+    def _flush():
+        if current_lines:
+            sections.append({
+                "heading": current_heading,
+                "text": "\n".join(current_lines).strip(),
+                "source_type": current_source_type,
+                "source_file": current_source_file,
+            })
 
     for line in body.splitlines():
-        if re.match(r"^#{1,3}\s+", line):
-            if current_lines:
-                sections.append({
-                    "heading": current_heading,
-                    "text": "\n".join(current_lines).strip(),
-                })
+        stripped = line.strip()
+        marker = _MARKER_RE.match(stripped)
+
+        if marker:
+            _flush()
+            current_lines = []
+            current_source_type = marker.group(1)
+            current_source_file = marker.group(2) or ""
+        elif re.match(r"^#{1,3}\s+", line):
+            _flush()
             current_heading = line.strip()
             current_lines = []
         else:
             current_lines.append(line)
 
-    if current_lines:
-        sections.append({
-            "heading": current_heading,
-            "text": "\n".join(current_lines).strip(),
-        })
-
+    _flush()
     return sections
 
 
@@ -89,18 +101,22 @@ def chunk_file(filepath: str) -> list[dict]:
 
         sub_chunks = _split_text(text, CHUNK_SIZE, CHUNK_OVERLAP)
         for i, chunk_text in enumerate(sub_chunks):
+            chunk_meta = {
+                "source": "notion",
+                "file_path": filepath,
+                "file_name": os.path.basename(filepath),
+                "title": meta.get("title", ""),
+                "notion_id": meta.get("notion_id", ""),
+                "url": meta.get("url", ""),
+                "heading": section["heading"],
+                "chunk_index": i,
+                "source_type": section.get("source_type", "document"),
+            }
+            if section.get("source_file"):
+                chunk_meta["source_file"] = section["source_file"]
             chunks.append({
                 "text": chunk_text,
-                "metadata": {
-                    "source": "notion",
-                    "file_path": filepath,
-                    "file_name": os.path.basename(filepath),
-                    "title": meta.get("title", ""),
-                    "notion_id": meta.get("notion_id", ""),
-                    "url": meta.get("url", ""),
-                    "heading": section["heading"],
-                    "chunk_index": i,
-                },
+                "metadata": chunk_meta,
             })
 
     return chunks

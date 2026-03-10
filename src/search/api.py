@@ -53,8 +53,9 @@ def search_endpoint(
     q: str = Query(..., description="검색 쿼리"),
     top_k: int = Query(20, ge=1, le=50, description="결과 수"),
     rerank: bool = Query(True, description="Reranker 사용 여부"),
+    source_type: str | None = Query(None, description="콘텐츠 유형 필터 (document, comment, file)"),
 ):
-    data = search(q, top_k=top_k, use_reranker=rerank)
+    data = search(q, top_k=top_k, use_reranker=rerank, source_type=source_type)
     return SearchResponse(
         query=q,
         count=len(data["results"]),

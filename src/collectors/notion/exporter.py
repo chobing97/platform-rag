@@ -87,9 +87,13 @@ def block_to_md(block: dict, indent: int = 0) -> str:
         lines.append(f"{prefix}![{caption}]({url})")
         extracted = block.get("_extracted_text", "")
         if extracted:
+            img_name = caption or Path(urlparse(url).path).name or "image"
+            lines.append(f"<!-- @source_type:file:{img_name} -->")
             lines.append("")
             for eline in extracted.split("\n"):
                 lines.append(f"{prefix}> {eline}")
+            lines.append("")
+            lines.append("<!-- @source_type:document -->")
 
     elif block_type in ("file", "pdf"):
         file_data = data.get("file", data.get("external", {}))
@@ -101,8 +105,11 @@ def block_to_md(block: dict, indent: int = 0) -> str:
         lines.append(f"{prefix}{icon} [{name}]({url})")
         extracted = block.get("_extracted_text", "")
         if extracted:
+            lines.append(f"<!-- @source_type:file:{name} -->")
             lines.append("")
             lines.append(extracted)
+            lines.append("")
+            lines.append("<!-- @source_type:document -->")
 
     elif block_type == "bookmark":
         url = data.get("url", "")
@@ -152,7 +159,7 @@ def comments_to_markdown(comments: list[dict]) -> str:
     if not comments:
         return ""
 
-    lines = ["## Comments", ""]
+    lines = ["<!-- @source_type:comment -->", "## Comments", ""]
     for comment in comments:
         created = comment.get("created_time", "")[:10]
         author = comment.get("created_by", {}).get("id", "unknown")

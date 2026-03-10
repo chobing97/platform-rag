@@ -12,7 +12,8 @@
 #   ./platformagent web  [start|stop|restart]    Next.js 검색 UI (port 3000)
 #   ./platformagent agent [--claude|--gemini] [-m MODEL]   AI Agent 대화형 모드
 #   ./platformagent agent-api [start|stop|restart|status]   Agent API 서버 (port 8001)
-#   ./platformagent sync               Notion 데이터 동기화
+#   ./platformagent sync [notion|email|all] [--full]   데이터 동기화
+#   ./platformagent index                              검색 인덱스 재구축 (Qdrant + BM25)
 
 set -e
 
@@ -231,10 +232,23 @@ sync_notion() {
     ok "Notion 동기화 완료"
 }
 
+sync_email() {
+    local mode="${1:-}"
+    cd "$ROOT_DIR/src/collectors"
+    if [ "$mode" = "--full" ]; then
+        info "DAOL 이메일 전체 동기화 시작..."
+        .venv/bin/python -m daolemail.sync --full
+    else
+        info "DAOL 이메일 증분 동기화 시작..."
+        .venv/bin/python -m daolemail.sync
+    fi
+    ok "DAOL 이메일 동기화 완료"
+}
+
 sync_all() {
     local mode="${1:-}"
     sync_notion "$mode"
-    # sync_gmail "$mode"   # 구현 후 활성화
+    sync_email "$mode"
     # sync_local "$mode"   # 구현 후 활성화
 }
 
@@ -244,7 +258,7 @@ sync_help() {
     echo ""
     echo "  all      전체 소스 동기화"
     echo "  notion   Notion 데이터 동기화"
-    echo "  gmail    Gmail 데이터 동기화 (미구현)"
+    echo "  email    DAOL 그룹웨어 이메일 동기화"
     echo "  local    로컬 파일 동기화 (미구현)"
     echo ""
     echo "  옵션:"
@@ -253,9 +267,20 @@ sync_help() {
     echo "  예시:"
     echo "    ./platformagent sync notion        # 변경된 페이지만 수집"
     echo "    ./platformagent sync notion --full   # 전체 페이지 재수집"
+    echo "    ./platformagent sync email         # 신규 이메일만 수집"
+    echo "    ./platformagent sync email --full    # 전체 이메일 재수집"
     echo "    ./platformagent sync all           # 모든 소스 증분 동기화"
     echo "    ./platformagent sync all --full      # 모든 소스 전체 재수집"
     echo ""
+}
+
+# ─── Index ───────────────────────────────────────────
+run_index() {
+    info "검색 인덱스 재구축 시작 (Qdrant + BM25)..."
+    cd "$ROOT_DIR/src/search"
+    MECABRC=/opt/homebrew/etc/mecabrc \
+        .venv/bin/python indexer.py
+    ok "검색 인덱스 재구축 완료"
 }
 
 # ─── Status ───────────────────────────────────────────
@@ -360,10 +385,12 @@ case "${1:-help}" in
         agent/.venv/bin/python -m agent "$@"
         ;;
     agent-api) svc_cmd agent_api "${2:-status}" ;;
+    index) run_index ;;
     sync)
         case "${2:-}" in
             all)    sync_all "${3:-}" ;;
             notion) sync_notion "${3:-}" ;;
+            email)  sync_email "${3:-}" ;;
             *)      sync_help ;;
         esac
         ;;
@@ -381,7 +408,8 @@ case "${1:-help}" in
         echo "  web   [start|stop|restart|status]   Next.js 검색 UI (port 3000)"
         echo "  agent [--claude|--gemini] [-m MODEL]   AI Agent 대화형 모드"
         echo "  agent-api [start|stop|restart|status]   Agent API 서버 (port 8001)"
-        echo "  sync               데이터 동기화 (./platformagent sync notion)"
+        echo "  index                                검색 인덱스 재구축 (Qdrant + BM25)"
+        echo "  sync  [notion|email|all] [--full]   데이터 동기화"
         echo ""
         ;;
 esac

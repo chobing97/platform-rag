@@ -9,6 +9,9 @@ logger = logging.getLogger(__name__)
 
 _ocr_instance = None
 
+# PaddleOCR 3.4.0+ 결과에서 텍스트 추출 시 최소 신뢰도
+_MIN_CONFIDENCE = 0.5
+
 
 def _get_ocr():
     """PaddleOCR 인스턴스를 싱글톤으로 반환한다.
@@ -20,9 +23,23 @@ def _get_ocr():
     if _ocr_instance is None:
         from paddleocr import PaddleOCR
 
-        _ocr_instance = PaddleOCR(lang="korean", use_angle_cls=True)
+        _ocr_instance = PaddleOCR(lang="korean")
         logger.info("PaddleOCR 초기화 완료 (lang=korean)")
     return _ocr_instance
+
+
+def _extract_texts_from_result(result: list) -> list[str]:
+    """PaddleOCR 3.4.0+ OCRResult 리스트에서 텍스트 추출."""
+    lines = []
+    for page in result:
+        if not page:
+            continue
+        texts = page.get("rec_texts", []) if hasattr(page, "get") else getattr(page, "rec_texts", [])
+        scores = page.get("rec_scores", []) if hasattr(page, "get") else getattr(page, "rec_scores", [])
+        for text, score in zip(texts, scores):
+            if score > _MIN_CONFIDENCE:
+                lines.append(text)
+    return lines
 
 
 # ─── 파일 다운로드 ──────────────────────────────────
@@ -52,11 +69,10 @@ def extract_text_from_image(image_path: str) -> str:
     """이미지에서 OCR로 텍스트를 추출한다."""
     ocr = _get_ocr()
     try:
-        result = ocr.ocr(image_path, cls=True)
-        if not result or not result[0]:
+        result = ocr.predict(image_path)
+        if not result:
             return ""
-        lines = [line[1][0] for line in result[0] if line[1][1] > 0.5]
-        return "\n".join(lines)
+        return "\n".join(_extract_texts_from_result(result))
     except Exception as e:
         logger.warning("이미지 OCR 실패 (%s): %s", os.path.basename(image_path), e)
         return ""
@@ -66,16 +82,10 @@ def extract_text_from_pdf(pdf_path: str) -> str:
     """PDF에서 OCR로 텍스트를 추출한다."""
     ocr = _get_ocr()
     try:
-        result = ocr.ocr(pdf_path, cls=True)
+        result = ocr.predict(pdf_path)
         if not result:
             return ""
-        lines = []
-        for page in result:
-            if page:
-                for line in page:
-                    if line[1][1] > 0.5:
-                        lines.append(line[1][0])
-        return "\n".join(lines)
+        return "\n".join(_extract_texts_from_result(result))
     except Exception as e:
         logger.warning("PDF OCR 실패 (%s): %s", os.path.basename(pdf_path), e)
         return ""
