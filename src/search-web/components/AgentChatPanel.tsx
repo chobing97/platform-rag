@@ -213,7 +213,7 @@ export default function AgentChatPanel() {
               }`}
             >
               <div className="text-sm leading-relaxed whitespace-pre-wrap">
-                {msg.content}
+                <Linkify text={msg.content} isUser={msg.role === "user"} />
               </div>
             </div>
           </div>
@@ -286,6 +286,31 @@ export default function AgentChatPanel() {
 }
 
 /* ─── Sub Components ──────────────────────────────── */
+
+const URL_REGEX = /(https?:\/\/[^\s<>)"]+)/g;
+
+function Linkify({ text, isUser }: { text: string; isUser?: boolean }) {
+  const parts = text.split(URL_REGEX);
+  return (
+    <>
+      {parts.map((part, i) =>
+        URL_REGEX.test(part) ? (
+          <a
+            key={i}
+            href={part}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={`underline break-all ${isUser ? "text-blue-100 hover:text-white" : "text-blue-600 hover:text-blue-800"}`}
+          >
+            {part}
+          </a>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </>
+  );
+}
 
 function PulsingDot() {
   return (
