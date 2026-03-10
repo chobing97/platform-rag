@@ -14,7 +14,7 @@ interface ResultCardProps {
   rerankScore?: number | null;
 }
 
-const API_URL = "http://localhost:8000";
+const API_URL = typeof window !== "undefined" ? `http://${window.location.hostname}:8000` : "http://localhost:8000";
 
 export default function ResultCard({
   rank,

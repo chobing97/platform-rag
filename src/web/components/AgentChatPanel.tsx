@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 
-const AGENT_API_URL = "http://localhost:8001";
+const AGENT_API_URL = typeof window !== "undefined" ? `http://${window.location.hostname}:8001` : "http://localhost:8001";
 
 interface ChatMessage {
   role: "user" | "assistant";

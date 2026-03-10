@@ -7,7 +7,7 @@ import ResultCard from "@/components/ResultCard";
 import ApiTestPanel from "@/components/ApiTestPanel";
 import McpTestPanel from "@/components/McpTestPanel";
 
-const API_URL = "http://localhost:8000";
+const API_URL = typeof window !== "undefined" ? `http://${window.location.hostname}:8000` : "http://localhost:8000";
 
 type Tab = "agent" | "search" | "api" | "mcp";
 
