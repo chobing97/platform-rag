@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "다올투자증권 플랫폼전략본부 지식베이스",
+  title: "다올투자증권 플랫폼전략본부 Knowledge Lake",
   description: "플랫폼전략본부 지식 검색",
 };
 
