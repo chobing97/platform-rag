@@ -54,7 +54,7 @@ platform rag/
 
 ## Design Principles
 
-- **SSOT (Single Source of Truth)**: 구조화된 Markdown이 유일한 정보 원천
+- **SSOT (Single Source of Truth)**: 플랫폼전략본부의 모든 정보는 여기로 집적되어야 한다.
 - **로컬 우선**: 민감 데이터는 사내 네트워크 밖으로 나가지 않음 (Claude API 호출만 예외)
 - **출처 필수**: 모든 AI 응답에 source_id, file_path, chunk_location 첨부 → 할루시네이션 방지
 - **증분 동기화**: `last_edited_time` 기반 delta sync로 불필요한 재수집 방지

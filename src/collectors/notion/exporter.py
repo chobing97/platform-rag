@@ -1,5 +1,8 @@
 """Notion 블록을 Markdown으로 변환한다."""
 
+from pathlib import Path
+from urllib.parse import urlparse
+
 
 def rich_text_to_md(rich_texts: list[dict]) -> str:
     """Notion rich_text 배열을 Markdown 문자열로 변환한다."""
@@ -82,6 +85,24 @@ def block_to_md(block: dict, indent: int = 0) -> str:
         url = image_data.get("url", "")
         caption = rich_text_to_md(data.get("caption", []))
         lines.append(f"{prefix}![{caption}]({url})")
+        extracted = block.get("_extracted_text", "")
+        if extracted:
+            lines.append("")
+            for eline in extracted.split("\n"):
+                lines.append(f"{prefix}> {eline}")
+
+    elif block_type in ("file", "pdf"):
+        file_data = data.get("file", data.get("external", {}))
+        url = file_data.get("url", "")
+        caption = rich_text_to_md(data.get("caption", []))
+        url_name = Path(urlparse(url).path).name if url else ""
+        name = caption or url_name or ("PDF 문서" if block_type == "pdf" else "첨부파일")
+        icon = "📄" if block_type == "pdf" else "📎"
+        lines.append(f"{prefix}{icon} [{name}]({url})")
+        extracted = block.get("_extracted_text", "")
+        if extracted:
+            lines.append("")
+            lines.append(extracted)
 
     elif block_type == "bookmark":
         url = data.get("url", "")

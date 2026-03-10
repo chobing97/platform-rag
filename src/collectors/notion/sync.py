@@ -14,11 +14,13 @@ from .db import (
     upsert_page_state,
 )
 from .exporter import blocks_to_markdown, comments_to_markdown, get_page_title
+from .ocr import process_media_blocks
 
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data", "notion")
+MEDIA_DIR = os.path.join(DATA_DIR, "media")
 
 
 def _sanitize_filename(name: str) -> str:
@@ -81,6 +83,12 @@ def sync(full: bool = False):
 
             blocks = get_page_blocks(client, page_id)
             comments = get_page_comments(client, page_id)
+
+            # 미디어 다운로드 + OCR 텍스트 추출
+            media_count = process_media_blocks(blocks, page_id, MEDIA_DIR)
+            if media_count:
+                logger.info("  미디어 처리: %d개 파일", media_count)
+
             markdown = blocks_to_markdown(blocks)
             comments_md = comments_to_markdown(comments)
 
