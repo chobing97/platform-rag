@@ -192,7 +192,7 @@ export default function AgentChatPanel() {
           <div className="flex items-center justify-center h-full text-gray-400">
             <div className="text-center">
               <div className="text-4xl mb-4">&#x1F9E0;</div>
-              <p className="text-lg font-medium">Platform RAG Agent</p>
+              <p className="text-lg font-medium">플랫폼전략본부 AI Agent</p>
               <p className="text-sm mt-1">
                 팀 지식베이스를 검색하고 분석하여 답변합니다
               </p>

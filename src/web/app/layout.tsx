@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Platform RAG Search",
-  description: "플랫폼 본부 지식 검색",
+  title: "다올투자증권 플랫폼전략본부 지식베이스",
+  description: "플랫폼전략본부 지식 검색",
 };
 
 export default function RootLayout({

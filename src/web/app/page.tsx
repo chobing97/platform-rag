@@ -90,7 +90,7 @@ export default function Home() {
   return (
     <main className="max-w-4xl mx-auto px-4 py-12">
       <h1 className="text-3xl font-bold text-center mb-8">
-        Platform RAG Search
+        다올투자증권 플랫폼전략본부 지식베이스
       </h1>
 
       {/* Tab Navigation */}
