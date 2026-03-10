@@ -18,6 +18,10 @@ interface StatusEvent {
 
 type ModelsMap = Record<string, string[]>;
 
+function generateSessionId() {
+  return crypto.randomUUID();
+}
+
 export default function AgentChatPanel() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -26,6 +30,7 @@ export default function AgentChatPanel() {
   const [models, setModels] = useState<ModelsMap>({});
   const [selectedProvider, setSelectedProvider] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
+  const [sessionId, setSessionId] = useState(() => generateSessionId());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -75,6 +80,7 @@ export default function AgentChatPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           query,
+          session_id: sessionId,
           provider: selectedProvider || undefined,
           model: selectedModel || undefined,
         }),
@@ -140,11 +146,13 @@ export default function AgentChatPanel() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          session_id: sessionId,
           provider: selectedProvider || undefined,
           model: selectedModel || undefined,
         }),
       });
     } catch {}
+    setSessionId(generateSessionId());
     setMessages([]);
     setStatusEvents([]);
   };

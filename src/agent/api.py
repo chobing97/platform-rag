@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,19 +23,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# provider:model 조합별 Agent 싱글턴
-_agents: dict[str, Agent] = {}
+# 세션별 Agent 관리
+_sessions: dict[str, dict] = {}  # session_id -> {"agent": Agent, "last_access": float}
+_SESSION_TTL = 3600  # 1시간 미사용 시 자동 정리
 
 
-def _get_agent(provider: str | None = None, model: str | None = None) -> Agent:
-    key = f"{provider or 'default'}:{model or 'default'}"
-    if key not in _agents:
-        _agents[key] = Agent(provider=provider, model=model)
-    return _agents[key]
+def _cleanup_sessions():
+    """만료된 세션을 정리한다."""
+    now = time.time()
+    expired = [sid for sid, s in _sessions.items() if now - s["last_access"] > _SESSION_TTL]
+    for sid in expired:
+        logger.info("세션 만료 정리: %s", sid)
+        del _sessions[sid]
+
+
+def _get_agent(session_id: str, provider: str | None = None, model: str | None = None) -> Agent:
+    _cleanup_sessions()
+    if session_id not in _sessions:
+        _sessions[session_id] = {
+            "agent": Agent(provider=provider, model=model),
+            "last_access": time.time(),
+        }
+    _sessions[session_id]["last_access"] = time.time()
+    return _sessions[session_id]["agent"]
 
 
 class AskRequest(BaseModel):
     query: str
+    session_id: str
     provider: str | None = None
     model: str | None = None
 
@@ -42,7 +58,7 @@ class AskRequest(BaseModel):
 @app.post("/agent/ask")
 async def ask_stream(req: AskRequest):
     """SSE 스트림으로 에이전트 상태와 최종 답변을 전달한다."""
-    agent = _get_agent(req.provider, req.model)
+    agent = _get_agent(req.session_id, req.provider, req.model)
 
     def event_generator():
         for event in agent.ask_stream(req.query):
@@ -54,6 +70,7 @@ async def ask_stream(req: AskRequest):
 
 
 class ResetRequest(BaseModel):
+    session_id: str
     provider: str | None = None
     model: str | None = None
 
@@ -61,10 +78,8 @@ class ResetRequest(BaseModel):
 @app.post("/agent/reset")
 async def reset(req: ResetRequest | None = None):
     """대화 기록을 초기화한다."""
-    provider = req.provider if req else None
-    model = req.model if req else None
-    agent = _get_agent(provider, model)
-    agent.reset()
+    if req and req.session_id in _sessions:
+        del _sessions[req.session_id]
     return {"status": "ok"}
 
 
