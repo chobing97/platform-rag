@@ -72,7 +72,10 @@ def extract_text_from_image(image_path: str) -> str:
         result = ocr.predict(image_path)
         if not result:
             return ""
-        return "\n".join(_extract_texts_from_result(result))
+        text = "\n".join(_extract_texts_from_result(result))
+        if text:
+            logger.info("이미지 OCR 완료 (%s): %d자", os.path.basename(image_path), len(text))
+        return text
     except Exception as e:
         logger.warning("이미지 OCR 실패 (%s): %s", os.path.basename(image_path), e)
         return ""
@@ -85,7 +88,10 @@ def extract_text_from_pdf(pdf_path: str) -> str:
         result = ocr.predict(pdf_path)
         if not result:
             return ""
-        return "\n".join(_extract_texts_from_result(result))
+        text = "\n".join(_extract_texts_from_result(result))
+        if text:
+            logger.info("PDF OCR 완료 (%s): %d자", os.path.basename(pdf_path), len(text))
+        return text
     except Exception as e:
         logger.warning("PDF OCR 실패 (%s): %s", os.path.basename(pdf_path), e)
         return ""
