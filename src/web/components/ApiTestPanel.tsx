@@ -4,7 +4,7 @@ import { useState } from "react";
 
 const API_URL = typeof window !== "undefined" ? `http://${window.location.hostname}:8000` : "http://localhost:8000";
 
-type Endpoint = "sources" | "document" | "related";
+type Endpoint = "sources" | "document" | "related" | "contacts" | "filters" | "health";
 
 export default function ApiTestPanel() {
   const [endpoint, setEndpoint] = useState<Endpoint>("sources");
@@ -22,6 +22,9 @@ export default function ApiTestPanel() {
   // related params
   const [relatedDocId, setRelatedDocId] = useState("");
   const [relatedTopK, setRelatedTopK] = useState(5);
+
+  // contacts params
+  const [contactKeyword, setContactKeyword] = useState("");
 
   const callApi = async () => {
     setIsLoading(true);
@@ -48,6 +51,19 @@ export default function ApiTestPanel() {
           if (!relatedDocId.trim()) throw new Error("문서 ID를 입력하세요");
           url = `${API_URL}/related/${relatedDocId.trim()}?top_k=${relatedTopK}`;
           break;
+        case "contacts": {
+          const cp = new URLSearchParams();
+          if (contactKeyword) cp.set("keyword", contactKeyword);
+          const cqs = cp.toString();
+          url = `${API_URL}/contacts${cqs ? `?${cqs}` : ""}`;
+          break;
+        }
+        case "filters":
+          url = `${API_URL}/filters`;
+          break;
+        case "health":
+          url = `${API_URL}/health`;
+          break;
       }
 
       const res = await fetch(url);
@@ -65,6 +81,9 @@ export default function ApiTestPanel() {
     { key: "sources", label: "GET /sources", desc: "문서 목록 조회" },
     { key: "document", label: "GET /document/{id}", desc: "문서 전체 내용" },
     { key: "related", label: "GET /related/{id}", desc: "관련 문서 검색" },
+    { key: "contacts", label: "GET /contacts", desc: "이메일 인물 목록 조회" },
+    { key: "filters", label: "GET /filters", desc: "검색 필터 옵션 조회" },
+    { key: "health", label: "GET /health", desc: "서버 상태 확인" },
   ];
 
   return (
@@ -137,6 +156,21 @@ export default function ApiTestPanel() {
               value={docId}
               onChange={(e) => setDocId(e.target.value)}
               placeholder="검색 결과에서 복사한 문서 ID"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </label>
+        )}
+
+        {endpoint === "contacts" && (
+          <label>
+            <span className="block text-sm font-medium text-gray-700 mb-1">
+              keyword (선택)
+            </span>
+            <input
+              type="text"
+              value={contactKeyword}
+              onChange={(e) => setContactKeyword(e.target.value)}
+              placeholder="이름 또는 이메일 검색"
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </label>
