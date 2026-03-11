@@ -105,12 +105,19 @@ def _get_memory_percent() -> float:
             return 50.0  # 측정 불가 시 안전한 기본값
 
 
-def collect_tasks(max_size_mb: float) -> list[str]:
+def collect_tasks(max_size_mb: float, source: str = "all") -> list[str]:
     """OCR 대상 파일 목록 수집. .txt sidecar가 없는 이미지/PDF만."""
     tasks = []
     max_size_bytes = max_size_mb * 1024 * 1024
 
-    for base_dir in (NOTION_DIR, DAOLEMAIL_DIR):
+    if source == "notion":
+        dirs = (NOTION_DIR,)
+    elif source == "email":
+        dirs = (DAOLEMAIL_DIR,)
+    else:
+        dirs = (NOTION_DIR, DAOLEMAIL_DIR)
+
+    for base_dir in dirs:
         if not os.path.isdir(base_dir):
             continue
         for root, _dirs, files in os.walk(base_dir):
@@ -141,9 +148,9 @@ def collect_tasks(max_size_mb: float) -> list[str]:
     return tasks
 
 
-def run(max_workers: int = 5, max_size_mb: float = 10.0, memory_limit: float = 80.0):
+def run(max_workers: int = 5, max_size_mb: float = 10.0, memory_limit: float = 80.0, source: str = "all"):
     """OCR Leader 메인 루프."""
-    tasks = collect_tasks(max_size_mb)
+    tasks = collect_tasks(max_size_mb, source=source)
     if not tasks:
         logger.info("OCR 대상 파일이 없습니다.")
         return
@@ -222,9 +229,10 @@ def run(max_workers: int = 5, max_size_mb: float = 10.0, memory_limit: float = 8
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="OCR Leader-Worker")
+    parser.add_argument("source", nargs="?", default="all", choices=["notion", "email", "all"], help="대상 소스 (기본: all)")
     parser.add_argument("--workers", type=int, default=5, help="최대 동시 worker 수 (기본: 5)")
     parser.add_argument("--max-size", type=float, default=10.0, help="파일 크기 제한 MB (기본: 10)")
     parser.add_argument("--memory-limit", type=float, default=80.0, help="메모리 사용률 제한 %% (기본: 80)")
     args = parser.parse_args()
 
-    run(max_workers=args.workers, max_size_mb=args.max_size, memory_limit=args.memory_limit)
+    run(max_workers=args.workers, max_size_mb=args.max_size, memory_limit=args.memory_limit, source=args.source)

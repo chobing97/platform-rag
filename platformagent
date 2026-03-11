@@ -13,7 +13,7 @@
 #   ./platformagent agent [--claude|--gemini] [-m MODEL]   AI Agent 대화형 모드
 #   ./platformagent agent-api [start|stop|restart|status]   Agent API 서버 (port 8001)
 #   ./platformagent sync [notion|email|all] [--full]   데이터 동기화
-#   ./platformagent ocr  [--workers N] [--max-size MB]  OCR 텍스트 추출 (Leader-Worker)
+#   ./platformagent ocr  [notion|email|all] [--workers N]  OCR 텍스트 추출 (Leader-Worker)
 #   ./platformagent index                              검색 인덱스 재구축 (Qdrant + BM25)
 
 set -e
@@ -434,7 +434,7 @@ case "${1:-help}" in
         echo "  agent [--claude|--gemini] [-m MODEL]   AI Agent 대화형 모드"
         echo "  agent-api [start|stop|restart|status]   Agent API 서버 (port 8001)"
         echo "  index [--full]                       검색 인덱스 갱신 (기본: 증분)"
-        echo "  ocr   [--workers N] [--max-size MB]  OCR 텍스트 추출 (Leader-Worker)"
+        echo "  ocr   [notion|email|all] [opts]       OCR 텍스트 추출 (Leader-Worker)"
         echo "  sync  [notion|email|all] [--full]   데이터 동기화"
         echo ""
         ;;
