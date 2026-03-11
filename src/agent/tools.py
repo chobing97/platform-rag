@@ -1,7 +1,12 @@
-"""도구 정의 및 FastAPI 호출."""
+"""도구 정의 및 FastAPI 호출.
+
+도구 스펙 SSOT: src/mcp-server/tools_spec.json
+이 파일은 해당 JSON을 로드하여 Claude/Gemini 형식으로 변환하고 실행 로직을 제공한다.
+"""
 
 import json
 import logging
+from pathlib import Path
 
 import httpx
 
@@ -9,42 +14,15 @@ from . import config
 
 logger = logging.getLogger(__name__)
 
-# ─── 도구 메타데이터 (프로바이더 중립) ─────────────────
+# ─── 도구 스펙 로드 ────────────────────────────────────
 
-TOOLS_META = [
-    {
-        "name": "search_knowledge",
-        "description": "팀 지식베이스를 자연어로 검색합니다. 노션 문서, 이메일, 로컬 파일에서 관련 정보를 찾아 출처와 함께 반환합니다.",
-        "parameters": {
-            "query": {"type": "string", "description": "검색 쿼리 (자연어 질문 또는 키워드)", "required": True},
-            "top_k": {"type": "integer", "description": "반환할 결과 수 (기본 5)", "required": False, "default": 5},
-            "rerank": {"type": "boolean", "description": "Reranker 사용 여부 (기본 true)", "required": False, "default": True},
-        },
-    },
-    {
-        "name": "get_document",
-        "description": "특정 문서의 전체 내용을 가져옵니다. search_knowledge 결과에서 받은 문서 ID를 사용하세요.",
-        "parameters": {
-            "doc_id": {"type": "string", "description": "문서(청크) ID", "required": True},
-        },
-    },
-    {
-        "name": "list_sources",
-        "description": "지식베이스에 수집된 문서 목록을 조회합니다. 소스 유형이나 키워드로 필터링할 수 있습니다.",
-        "parameters": {
-            "source_type": {"type": "string", "description": "소스 유형 필터 (예: notion, email, file)", "required": False},
-            "keyword": {"type": "string", "description": "제목 키워드 검색", "required": False},
-        },
-    },
-    {
-        "name": "get_related",
-        "description": "특정 문서와 의미적으로 관련된 다른 문서들을 찾습니다. 벡터 유사도 기반.",
-        "parameters": {
-            "doc_id": {"type": "string", "description": "기준 문서(청크) ID", "required": True},
-            "top_k": {"type": "integer", "description": "반환할 관련 문서 수 (기본 5)", "required": False, "default": 5},
-        },
-    },
-]
+_SPEC_PATH = Path(__file__).parent.parent / "mcp-server" / "tools_spec.json"
+
+with _SPEC_PATH.open(encoding="utf-8") as _f:
+    TOOLS_SPEC: list[dict] = json.load(_f)
+
+# name → spec 인덱스 (execute_tool에서 O(1) 조회)
+_SPEC_INDEX: dict[str, dict] = {t["name"]: t for t in TOOLS_SPEC}
 
 # ─── Claude 형식 변환 ─────────────────────────────────
 
@@ -54,20 +32,19 @@ _JSON_TYPE_MAP = {"string": "string", "integer": "integer", "boolean": "boolean"
 def to_claude_tools() -> list[dict]:
     """Anthropic Messages API 도구 스키마로 변환한다."""
     tools = []
-    for meta in TOOLS_META:
+    for tool in TOOLS_SPEC:
         properties = {}
         required = []
-        for pname, pspec in meta["parameters"].items():
-            prop = {"type": _JSON_TYPE_MAP[pspec["type"]], "description": pspec["description"]}
-            if "default" in pspec:
-                prop["default"] = pspec["default"]
-            properties[pname] = prop
-            if pspec.get("required"):
-                required.append(pname)
-
+        for p in tool["parameters"]:
+            prop = {"type": _JSON_TYPE_MAP[p["type"]], "description": p["description"]}
+            if "default" in p:
+                prop["default"] = p["default"]
+            properties[p["name"]] = prop
+            if p.get("required"):
+                required.append(p["name"])
         tools.append({
-            "name": meta["name"],
-            "description": meta["description"],
+            "name": tool["name"],
+            "description": tool["description"],
             "input_schema": {"type": "object", "properties": properties, "required": required},
         })
     return tools
@@ -81,17 +58,16 @@ _GEMINI_TYPE_MAP = {"string": "STRING", "integer": "INTEGER", "boolean": "BOOLEA
 def to_gemini_declarations() -> list[dict]:
     """Google GenAI function_declarations 형식으로 변환한다."""
     declarations = []
-    for meta in TOOLS_META:
+    for tool in TOOLS_SPEC:
         properties = {}
         required = []
-        for pname, pspec in meta["parameters"].items():
-            properties[pname] = {"type": _GEMINI_TYPE_MAP[pspec["type"]], "description": pspec["description"]}
-            if pspec.get("required"):
-                required.append(pname)
-
+        for p in tool["parameters"]:
+            properties[p["name"]] = {"type": _GEMINI_TYPE_MAP[p["type"]], "description": p["description"]}
+            if p.get("required"):
+                required.append(p["name"])
         declarations.append({
-            "name": meta["name"],
-            "description": meta["description"],
+            "name": tool["name"],
+            "description": tool["description"],
             "parameters": {"type": "OBJECT", "properties": properties, "required": required},
         })
     return declarations
@@ -100,57 +76,56 @@ def to_gemini_declarations() -> list[dict]:
 # ─── 도구 실행 (FastAPI 호출) ─────────────────────────
 
 def execute_tool(name: str, arguments: dict) -> dict:
-    """FastAPI 엔드포인트를 호출하여 도구를 실행한다."""
-    base = config.SEARCH_API_URL
+    """tools_spec.json의 api 설정을 기반으로 FastAPI 엔드포인트를 호출한다."""
+    spec = _SPEC_INDEX.get(name)
+    if spec is None:
+        return {"error": f"알 수 없는 도구: {name}"}
+
+    api = spec["api"]
+    method = api["method"].upper()
+    timeout = float(api.get("timeout", 30.0))
+    rename: dict = api.get("param_rename", {})
+
+    # 1. path param 치환 ({doc_id} → 실제 값)
+    path: str = api["path"]
+    path_params = {k for k in arguments if f"{{{k}}}" in path}
+    for k in path_params:
+        path = path.replace(f"{{{k}}}", str(arguments[k]))
+
+    # 2. 나머지 인자 구성 (path param 제외, None 제외, rename 적용)
+    rest = {
+        rename.get(k, k): v
+        for k, v in arguments.items()
+        if k not in path_params and v is not None
+    }
+
+    url = f"{config.SEARCH_API_URL}{path}"
+    logger.info("HTTP %s %s %s", method, url, rest)
+
     try:
-        if name == "search_knowledge":
-            params = {"q": arguments["query"]}
-            if "top_k" in arguments:
-                params["top_k"] = arguments["top_k"]
-            if "rerank" in arguments:
-                params["rerank"] = str(arguments["rerank"]).lower()
-            url = f"{base}/search"
-            logger.info("HTTP GET %s params=%s", url, params)
-            res = httpx.get(url, params=params, timeout=60.0)
-
-        elif name == "get_document":
-            url = f"{base}/document/{arguments['doc_id']}"
-            logger.info("HTTP GET %s", url)
-            res = httpx.get(url, timeout=30.0)
-
-        elif name == "list_sources":
-            params = {}
-            if arguments.get("source_type"):
-                params["source_type"] = arguments["source_type"]
-            if arguments.get("keyword"):
-                params["keyword"] = arguments["keyword"]
-            url = f"{base}/sources"
-            logger.info("HTTP GET %s params=%s", url, params)
-            res = httpx.get(url, params=params, timeout=30.0)
-
-        elif name == "get_related":
-            params = {}
-            if "top_k" in arguments:
-                params["top_k"] = arguments["top_k"]
-            url = f"{base}/related/{arguments['doc_id']}"
-            logger.info("HTTP GET %s params=%s", url, params)
-            res = httpx.get(url, params=params, timeout=30.0)
-
+        if method == "GET":
+            res = httpx.get(url, params=rest, timeout=timeout)
+        elif method == "POST":
+            res = httpx.post(url, json=rest, timeout=timeout)
+        elif method == "PUT":
+            res = httpx.put(url, json=rest, timeout=timeout)
+        elif method == "DELETE":
+            res = httpx.delete(url, timeout=timeout)
         else:
-            return {"error": f"알 수 없는 도구: {name}"}
+            return {"error": f"지원하지 않는 HTTP 메서드: {method}"}
 
         logger.info("HTTP 응답: %d (%d bytes)", res.status_code, len(res.content))
         res.raise_for_status()
         data = res.json()
 
-        # 검색 결과 신뢰도 경고 추가
+        # 도메인 후처리 (search_knowledge 전용)
         if name == "search_knowledge":
             data = _enrich_search_results(data)
 
         return data
 
     except httpx.ConnectError:
-        return {"error": f"검색 API 서버에 연결할 수 없습니다 ({base}). 서버가 실행 중인지 확인하세요."}
+        return {"error": f"검색 API 서버에 연결할 수 없습니다 ({config.SEARCH_API_URL}). 서버가 실행 중인지 확인하세요."}
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
             return {"error": "문서를 찾을 수 없습니다."}

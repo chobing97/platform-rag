@@ -1,0 +1,79 @@
+[
+  {
+    "name": "search_knowledge",
+    "description": "다올투자증권 플랫폼전략팀 지식베이스를 자연어로 검색합니다. 노션 문서, 이메일, 로컬 파일에서 관련 정보를 찾아 출처와 함께 반환합니다. 사용 가능한 필터 값은 get_search_filters 도구로 확인하세요.",
+    "api": {
+      "method": "GET",
+      "path": "/search",
+      "timeout": 60,
+      "param_rename": { "query": "q" }
+    },
+    "parameters": [
+      { "name": "query",       "type": "string",  "description": "검색 쿼리 (자연어 질문 또는 키워드)",                           "required": true },
+      { "name": "top_k",       "type": "integer", "description": "반환할 결과 수 (기본 5)",                                      "required": false, "default": 5 },
+      { "name": "rerank",      "type": "boolean", "description": "Reranker 사용 여부 (기본 true)",                               "required": false, "default": true },
+      { "name": "source",      "type": "string",  "description": "데이터 소스 필터 (예: notion, daolemail)",                     "required": false },
+      { "name": "source_type", "type": "string",  "description": "콘텐츠 유형 필터 (예: document, email_body, email_attachment)", "required": false },
+      { "name": "sender",      "type": "string",  "description": "발신자 이메일 주소로 필터링",                                  "required": false },
+      { "name": "recipient",   "type": "string",  "description": "수신자 이메일 주소로 필터링 (To+CC)",                          "required": false },
+      { "name": "participant", "type": "string",  "description": "참여자 이메일로 필터링 (발신+수신+참조 모두)",                  "required": false },
+      { "name": "direction",   "type": "string",  "description": "메일 방향 필터 (sent: 보낸 메일, received: 받은 메일)",         "required": false }
+    ]
+  },
+  {
+    "name": "get_document",
+    "description": "특정 문서의 전체 내용을 가져옵니다. search_knowledge 결과에서 받은 문서 ID를 사용하세요.",
+    "api": {
+      "method": "GET",
+      "path": "/document/{doc_id}"
+    },
+    "parameters": [
+      { "name": "doc_id", "type": "string", "description": "문서(청크) ID", "required": true }
+    ]
+  },
+  {
+    "name": "list_sources",
+    "description": "지식베이스에 수집된 문서 목록을 조회합니다. 소스 유형이나 키워드로 필터링할 수 있습니다.",
+    "api": {
+      "method": "GET",
+      "path": "/sources"
+    },
+    "parameters": [
+      { "name": "source_type", "type": "string", "description": "소스 유형 필터 (예: notion, email, file)", "required": false },
+      { "name": "keyword",     "type": "string", "description": "제목 키워드 검색",                        "required": false }
+    ]
+  },
+  {
+    "name": "get_related",
+    "description": "특정 문서와 의미적으로 관련된 다른 문서들을 찾습니다. 벡터 유사도 기반.",
+    "api": {
+      "method": "GET",
+      "path": "/related/{doc_id}"
+    },
+    "parameters": [
+      { "name": "doc_id", "type": "string",  "description": "기준 문서(청크) ID",              "required": true },
+      { "name": "top_k",  "type": "integer", "description": "반환할 관련 문서 수 (기본 5)", "required": false, "default": 5 }
+    ]
+  },
+  {
+    "name": "list_email_contacts",
+    "description": "이메일에 등장하는 인물(발신자/수신자/참조자) 목록을 조회합니다. 이름이나 이메일 주소로 검색할 수 있습니다. 특정 인물의 이메일 주소를 확인한 뒤 search_knowledge의 sender/recipient/participant 필터에 사용하세요.",
+    "api": {
+      "method": "GET",
+      "path": "/contacts"
+    },
+    "parameters": [
+      { "name": "keyword", "type": "string",  "description": "이름 또는 이메일 주소 검색어", "required": false },
+      { "name": "limit",   "type": "integer", "description": "반환할 결과 수 (기본 20)",    "required": false, "default": 20 }
+    ]
+  },
+  {
+    "name": "get_search_filters",
+    "description": "검색에 사용할 수 있는 필터 옵션(데이터 소스, 콘텐츠 유형)을 조회합니다. search_knowledge의 source, source_type 파라미터에 사용할 값을 확인하세요.",
+    "api": {
+      "method": "GET",
+      "path": "/filters"
+    },
+    "parameters": []
+  }
+]
