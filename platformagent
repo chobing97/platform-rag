@@ -227,11 +227,11 @@ sync_notion() {
     cd "$ROOT_DIR/src/collectors"
     if [ "$mode" = "--full" ]; then
         info "Notion 전체 동기화 시작..."
-        .venv/bin/python -m notion.sync --full
+        .venv/bin/python -m notion.sync --full 2>&1
     else
         info "Notion 증분 동기화 시작..."
-        .venv/bin/python -m notion.sync
-    fi | tee >> "$notionLog" 2>&1
+        .venv/bin/python -m notion.sync 2>&1
+    fi | tee -a "$notionLog"
     ok "Notion 동기화 완료"
 }
 
@@ -242,11 +242,11 @@ sync_email() {
     cd "$ROOT_DIR/src/collectors"
     if [ "$mode" = "--full" ]; then
         info "DAOL 이메일 전체 동기화 시작..."
-        .venv/bin/python -m daolemail.sync --full
+        .venv/bin/python -m daolemail.sync --full 2>&1
     else
         info "DAOL 이메일 증분 동기화 시작..."
-        .venv/bin/python -m daolemail.sync
-    fi | tee >> "$emailLog" 2>&1
+        .venv/bin/python -m daolemail.sync 2>&1
+    fi | tee -a "$emailLog"
     ok "DAOL 이메일 동기화 완료"
 }
 
