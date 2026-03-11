@@ -287,19 +287,6 @@ run_ocr() {
     ok "OCR 텍스트 추출 완료"
 }
 
-# ─── Migrate ─────────────────────────────────────────
-run_migrate_data() {
-    info "data/ 디렉토리 구조 마이그레이션 (raw/index/web)..."
-    "$ROOT_DIR/scripts/migrate_data_dirs.sh" "$@"
-}
-
-run_migrate_notion() {
-    info "Notion 데이터 마이그레이션 (flat → bucket)..."
-    cd "$ROOT_DIR/src/collectors"
-    .venv/bin/python -m notion.migrate_to_buckets "$@"
-    ok "Notion 데이터 마이그레이션 완료"
-}
-
 # ─── Index ───────────────────────────────────────────
 run_index() {
     info "검색 인덱스 재구축 시작 (Qdrant + BM25)..."
@@ -416,14 +403,6 @@ case "${1:-help}" in
         shift
         run_ocr "$@"
         ;;
-    migrate-data)
-        shift
-        run_migrate_data "$@"
-        ;;
-    migrate-notion)
-        shift
-        run_migrate_notion "$@"
-        ;;
     sync)
         case "${2:-}" in
             all)    sync_all "${3:-}" ;;
@@ -449,8 +428,6 @@ case "${1:-help}" in
         echo "  index                                검색 인덱스 재구축 (Qdrant + BM25)"
         echo "  ocr   [--workers N] [--max-size MB]  OCR 텍스트 추출 (Leader-Worker)"
         echo "  sync  [notion|email|all] [--full]   데이터 동기화"
-        echo "  migrate-data [--dry-run]             data/ 디렉토리 구조 마이그레이션"
-        echo "  migrate-notion [--dry-run]           Notion 데이터 bucket 구조 마이그레이션"
         echo ""
         ;;
 esac
