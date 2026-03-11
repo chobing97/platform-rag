@@ -117,16 +117,75 @@ def _embed_query(query: str) -> list[float]:
     return response.json()["embeddings"][0]
 
 
-def _vector_search(query_vec: list[float], top_k: int, source_type: str | None = None) -> list[dict]:
-    """Qdrant 벡터 검색."""
+@dataclass
+class SearchFilters:
+    """검색 필터 조건."""
+    source: str | None = None          # notion, daolemail
+    source_type: str | None = None     # document, email_body, email_attachment
+    sender: str | None = None          # 발신자 이메일
+    recipient: str | None = None       # 수신자 이메일 (To+CC)
+    participant: str | None = None     # 참여자 이메일 (발신+수신+참조 모두)
+
+
+def _build_qdrant_filter(filters: SearchFilters):
+    """SearchFilters를 Qdrant Filter 객체로 변환한다."""
     from qdrant_client.models import FieldCondition, Filter, MatchValue
 
+    conditions = []
+    if filters.source:
+        conditions.append(FieldCondition(key="source", match=MatchValue(value=filters.source)))
+    if filters.source_type:
+        conditions.append(FieldCondition(key="source_type", match=MatchValue(value=filters.source_type)))
+    if filters.sender:
+        conditions.append(FieldCondition(key="sender_email", match=MatchValue(value=filters.sender)))
+    if filters.recipient:
+        conditions.append(Filter(should=[
+            FieldCondition(key="recipient_emails", match=MatchValue(value=filters.recipient)),
+            FieldCondition(key="cc_emails", match=MatchValue(value=filters.recipient)),
+        ]))
+    if filters.participant:
+        conditions.append(Filter(should=[
+            FieldCondition(key="sender_email", match=MatchValue(value=filters.participant)),
+            FieldCondition(key="recipient_emails", match=MatchValue(value=filters.participant)),
+            FieldCondition(key="cc_emails", match=MatchValue(value=filters.participant)),
+        ]))
+    return Filter(must=conditions) if conditions else None
+
+
+def _match_bm25_filters(meta: dict, filters: SearchFilters) -> bool:
+    """BM25 결과에 대해 필터 조건을 매칭한다."""
+    if filters.source and meta.get("source") != filters.source:
+        return False
+    if filters.source_type and meta.get("source_type") != filters.source_type:
+        return False
+    if filters.sender and meta.get("sender_email") != filters.sender:
+        return False
+    if filters.recipient:
+        r_emails = meta.get("recipient_emails", [])
+        c_emails = meta.get("cc_emails", [])
+        if isinstance(r_emails, str):
+            r_emails = []
+        if isinstance(c_emails, str):
+            c_emails = []
+        if filters.recipient not in r_emails and filters.recipient not in c_emails:
+            return False
+    if filters.participant:
+        all_emails = [meta.get("sender_email", "")]
+        r_emails = meta.get("recipient_emails", [])
+        c_emails = meta.get("cc_emails", [])
+        if isinstance(r_emails, list):
+            all_emails.extend(r_emails)
+        if isinstance(c_emails, list):
+            all_emails.extend(c_emails)
+        if filters.participant not in all_emails:
+            return False
+    return True
+
+
+def _vector_search(query_vec: list[float], top_k: int, filters: SearchFilters | None = None) -> list[dict]:
+    """Qdrant 벡터 검색."""
     client = QdrantClient(url=QDRANT_URL)
-    query_filter = None
-    if source_type:
-        query_filter = Filter(
-            must=[FieldCondition(key="source_type", match=MatchValue(value=source_type))]
-        )
+    query_filter = _build_qdrant_filter(filters) if filters else None
     results = client.query_points(
         collection_name=QDRANT_COLLECTION,
         query=query_vec,
@@ -145,7 +204,7 @@ def _vector_search(query_vec: list[float], top_k: int, source_type: str | None =
     ]
 
 
-def _bm25_search(query: str, top_k: int, source_type: str | None = None) -> list[dict]:
+def _bm25_search(query: str, top_k: int, filters: SearchFilters | None = None) -> list[dict]:
     """BM25 키워드 검색."""
     _load_bm25()
     state = _bm25  # 로컬 참조 — swap 중에도 일관성 보장
@@ -159,7 +218,7 @@ def _bm25_search(query: str, top_k: int, source_type: str | None = None) -> list
     for i in top_indices:
         if scores[i] <= 0:
             break
-        if source_type and state.corpus[i]["metadata"].get("source_type") != source_type:
+        if filters and not _match_bm25_filters(state.corpus[i]["metadata"], filters):
             continue
         results.append({
             "id": state.corpus[i]["id"],
@@ -326,10 +385,38 @@ def get_related(doc_id: str, top_k: int = 5) -> list[dict]:
     ][:top_k]
 
 
-def search(query: str, top_k: int = TOP_K_RERANK, use_reranker: bool = True, source_type: str | None = None) -> dict:
+def get_filters() -> dict:
+    """사용 가능한 검색 필터 옵션을 BM25 코퍼스에서 집계하여 반환한다."""
+    _load_bm25()
+    state = _bm25
+    if state is None:
+        return {"sources": [], "source_types": []}
+
+    source_counts: dict[str, int] = {}
+    type_counts: dict[str, int] = {}
+    for doc in state.corpus:
+        src = doc["metadata"].get("source", "")
+        if src:
+            source_counts[src] = source_counts.get(src, 0) + 1
+        st = doc["metadata"].get("source_type", "")
+        if st:
+            type_counts[st] = type_counts.get(st, 0) + 1
+
+    return {
+        "sources": [{"value": k, "count": v} for k, v in sorted(source_counts.items())],
+        "source_types": [{"value": k, "count": v} for k, v in sorted(type_counts.items())],
+    }
+
+
+def search(
+    query: str,
+    top_k: int = TOP_K_RERANK,
+    use_reranker: bool = True,
+    filters: SearchFilters | None = None,
+) -> dict:
     """Hybrid Search 전체 파이프라인. 결과와 성능 정보를 반환한다."""
     import time
-    logger.info("검색 쿼리: %s (source_type=%s)", query, source_type or "all")
+    logger.info("검색 쿼리: %s (filters=%s)", query, filters)
     timings: dict[str, float] = {}
 
     # 1. 임베딩
@@ -339,12 +426,12 @@ def search(query: str, top_k: int = TOP_K_RERANK, use_reranker: bool = True, sou
 
     # 2. 벡터 검색
     t = time.time()
-    vector_results = _vector_search(query_vec, TOP_K_RETRIEVAL, source_type=source_type)
+    vector_results = _vector_search(query_vec, TOP_K_RETRIEVAL, filters=filters)
     timings["vector_search"] = time.time() - t
 
     # 3. BM25 검색
     t = time.time()
-    bm25_results = _bm25_search(query, TOP_K_RETRIEVAL, source_type=source_type)
+    bm25_results = _bm25_search(query, TOP_K_RETRIEVAL, filters=filters)
     timings["bm25_search"] = time.time() - t
 
     logger.info("Vector: %d건, BM25: %d건", len(vector_results), len(bm25_results))

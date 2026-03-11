@@ -1,5 +1,6 @@
 """DAOL 이메일 수집 상태 관리 (SQLite)."""
 
+import json
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -22,6 +23,14 @@ def _get_conn() -> sqlite3.Connection:
             date        TEXT,
             file_path   TEXT,
             synced_at   TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS email_contacts (
+            email       TEXT PRIMARY KEY,
+            names       TEXT NOT NULL DEFAULT '[]',
+            mail_count  INTEGER DEFAULT 1,
+            first_seen  TEXT,
+            last_seen   TEXT
         );
 
         CREATE TABLE IF NOT EXISTS mail_sync_log (
@@ -72,6 +81,56 @@ def upsert_mail_state(
     )
     conn.commit()
     conn.close()
+
+
+def upsert_contact(email: str, name: str, date: str) -> None:
+    """이메일 인물 정보 저장/갱신. 이름이 새로우면 names 배열에 추가."""
+    email = email.lower().strip()
+    name = name.strip()
+    if not email:
+        return
+
+    conn = _get_conn()
+    row = conn.execute("SELECT names, mail_count FROM email_contacts WHERE email=?", (email,)).fetchone()
+
+    now = datetime.now(timezone.utc).isoformat()
+    if row is None:
+        names = [name] if name else []
+        conn.execute(
+            "INSERT INTO email_contacts (email, names, mail_count, first_seen, last_seen) VALUES (?, ?, 1, ?, ?)",
+            (email, json.dumps(names, ensure_ascii=False), date or now, date or now),
+        )
+    else:
+        existing_names = json.loads(row["names"])
+        if name and name not in existing_names:
+            existing_names.append(name)
+        conn.execute(
+            "UPDATE email_contacts SET names=?, mail_count=mail_count+1, last_seen=? WHERE email=?",
+            (json.dumps(existing_names, ensure_ascii=False), date or now, email),
+        )
+
+    conn.commit()
+    conn.close()
+
+
+def get_contacts(keyword: str | None = None, limit: int = 100) -> list[dict]:
+    """이메일 인물 목록 조회. keyword로 이름 또는 이메일 부분 매칭."""
+    conn = _get_conn()
+    if keyword:
+        rows = conn.execute(
+            "SELECT email, names, mail_count FROM email_contacts WHERE email LIKE ? OR names LIKE ? ORDER BY mail_count DESC LIMIT ?",
+            (f"%{keyword}%", f"%{keyword}%", limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT email, names, mail_count FROM email_contacts ORDER BY mail_count DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    conn.close()
+    return [
+        {"email": r["email"], "names": json.loads(r["names"]), "mail_count": r["mail_count"]}
+        for r in rows
+    ]
 
 
 def start_sync_run() -> int:

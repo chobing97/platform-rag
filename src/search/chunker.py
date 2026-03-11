@@ -1,5 +1,6 @@
 """Markdown 파일을 청크로 분할한다."""
 
+import json
 import logging
 import os
 import re
@@ -9,6 +10,17 @@ from config import CHUNK_OVERLAP, CHUNK_SIZE, DAOLEMAIL_DIR, NOTION_DIR
 logger = logging.getLogger(__name__)
 
 _MARKER_RE = re.compile(r"^<!-- @source_type:(\w+)(?::(.+?))? -->$")
+
+
+def _parse_list_field(value: str) -> list[str]:
+    """frontmatter의 리스트 필드를 파싱한다. JSON 또는 Python 리스트 리터럴 대응."""
+    if not value or value == "[]":
+        return []
+    try:
+        parsed = json.loads(value.replace("'", '"'))
+        return parsed if isinstance(parsed, list) else []
+    except (json.JSONDecodeError, ValueError):
+        return []
 
 
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
@@ -118,7 +130,11 @@ def chunk_file(filepath: str) -> list[dict]:
             elif source == "daolemail":
                 chunk_meta["mail_idx"] = meta.get("mail_idx", "")
                 chunk_meta["sender"] = meta.get("sender", "")
+                chunk_meta["sender_email"] = meta.get("sender_email", "")
                 chunk_meta["date"] = meta.get("date", "")
+                # recipient_emails, cc_emails는 리스트로 저장 (Qdrant 배열 필터용)
+                chunk_meta["recipient_emails"] = _parse_list_field(meta.get("recipient_emails", "[]"))
+                chunk_meta["cc_emails"] = _parse_list_field(meta.get("cc_emails", "[]"))
             if section.get("source_file"):
                 chunk_meta["source_file"] = section["source_file"]
             chunks.append({

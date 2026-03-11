@@ -22,6 +22,14 @@ class AttachmentInfo:
 
 
 @dataclass
+class MailDetail:
+    """메일 상세 정보 (수신자, 참조자, 첨부파일)."""
+    recipients: list[str] = field(default_factory=list)   # ["이름 <email>", ...]
+    cc: list[str] = field(default_factory=list)            # ["이름 <email>", ...]
+    attachments: list[AttachmentInfo] = field(default_factory=list)
+
+
+@dataclass
 class MailSummary:
     """메일 목록에서 파싱한 메일 요약 정보."""
     mail_idx: int
@@ -143,10 +151,10 @@ class DaolMailClient:
         resp.encoding = "utf-8"
         return resp.text
 
-    # ── 첨부파일 ─────────────────────────────────────────────
+    # ── 메일 상세 (수신자/참조자/첨부파일) ────────────────────
 
-    def get_attachment_info(self, mbox_idx: int, mail_idx: int) -> list[AttachmentInfo]:
-        """메일 상세 페이지에서 첨부파일 정보 추출."""
+    def _fetch_detail_html(self, mbox_idx: int, mail_idx: int) -> str:
+        """메일 상세 페이지 HTML을 가져온다."""
         resp = self._get(
             "mailread.ds",
             params={
@@ -174,7 +182,41 @@ class DaolMailClient:
             },
         )
         resp.encoding = "utf-8"
-        return self._parse_attachment_info(resp.text)
+        return resp.text
+
+    def get_mail_detail(self, mbox_idx: int, mail_idx: int) -> MailDetail:
+        """메일 상세 정보 조회 (수신자, 참조자, 첨부파일)."""
+        html_text = self._fetch_detail_html(mbox_idx, mail_idx)
+        recipients = self._parse_address_field(html_text, "받는사람")
+        cc = self._parse_address_field(html_text, "참조")
+        attachments = self._parse_attachment_info(html_text)
+        return MailDetail(recipients=recipients, cc=cc, attachments=attachments)
+
+    def get_attachment_info(self, mbox_idx: int, mail_idx: int) -> list[AttachmentInfo]:
+        """메일 상세 페이지에서 첨부파일 정보 추출. (하위 호환용)"""
+        return self.get_mail_detail(mbox_idx, mail_idx).attachments
+
+    @staticmethod
+    def _parse_address_field(html_text: str, label: str) -> list[str]:
+        """메일 상세 HTML에서 특정 필드(받는사람/참조)의 주소 목록을 파싱한다."""
+        # 전략 1: label이 포함된 <th>/<td> 행에서 title 속성의 "이름 <email>" 추출
+        pattern = rf'{label}.*?</t[hd]>\s*<td[^>]*>(.*?)</td>'
+        match = re.search(pattern, html_text, re.DOTALL | re.IGNORECASE)
+        if not match:
+            return []
+
+        section = match.group(1)
+        # title="이름 &lt;email&gt;" 패턴
+        titles = re.findall(r'title="([^"]*)"', section)
+        if titles:
+            return [html.unescape(t) for t in titles if "@" in html.unescape(t)]
+
+        # 전략 2: title 없으면 텍스트에서 직접 "이름 <email>" 패턴 추출
+        decoded = html.unescape(section)
+        # HTML 태그 제거
+        decoded = re.sub(r"<[^>]+>", " ", decoded)
+        addresses = re.findall(r'[^,;]+?\s*<[^>]+@[^>]+>', decoded)
+        return [a.strip() for a in addresses]
 
     def _parse_attachment_info(self, html_text: str) -> list[AttachmentInfo]:
         """메일 상세 HTML에서 첨부파일 목록 파싱."""

@@ -22,7 +22,7 @@ const server = new McpServer({
 // Tool 1: search_knowledge
 server.tool(
   "search_knowledge",
-  "다올투자증권 플랫폼전략팀 지식베이스를 자연어로 검색합니다. 노션 문서, 이메일, 로컬 파일에서 관련 정보를 찾아 출처와 함께 반환합니다.",
+  "다올투자증권 플랫폼전략팀 지식베이스를 자연어로 검색합니다. 노션 문서, 이메일, 로컬 파일에서 관련 정보를 찾아 출처와 함께 반환합니다. 사용 가능한 필터 값은 get_search_filters 도구로 확인하세요.",
   {
     query: z.string().describe("검색 쿼리 (자연어 질문 또는 키워드)"),
     top_k: z
@@ -36,13 +36,38 @@ server.tool(
       .boolean()
       .default(true)
       .describe("Reranker 사용 여부 (기본 true)"),
+    source: z
+      .string()
+      .optional()
+      .describe("데이터 소스 필터 (예: notion, daolemail)"),
+    source_type: z
+      .string()
+      .optional()
+      .describe("콘텐츠 유형 필터 (예: document, email_body, email_attachment)"),
+    sender: z
+      .string()
+      .optional()
+      .describe("발신자 이메일 주소로 필터링"),
+    recipient: z
+      .string()
+      .optional()
+      .describe("수신자 이메일 주소로 필터링 (To+CC)"),
+    participant: z
+      .string()
+      .optional()
+      .describe("참여자 이메일로 필터링 (발신+수신+참조 모두)"),
   },
-  async ({ query, top_k, rerank }) => {
+  async ({ query, top_k, rerank, source, source_type, sender, recipient, participant }) => {
     const params = new URLSearchParams({
       q: query,
       top_k: String(top_k),
       rerank: String(rerank),
     });
+    if (source) params.set("source", source);
+    if (source_type) params.set("source_type", source_type);
+    if (sender) params.set("sender", sender);
+    if (recipient) params.set("recipient", recipient);
+    if (participant) params.set("participant", participant);
 
     const data = (await apiFetch(`/search?${params}`)) as {
       query: string;
@@ -239,6 +264,97 @@ server.tool(
         {
           type: "text" as const,
           text: `관련 문서 ${data.results.length}건\n\n${list}`,
+        },
+      ],
+    };
+  }
+);
+
+// Tool 5: list_email_contacts
+server.tool(
+  "list_email_contacts",
+  "이메일에 등장하는 인물(발신자/수신자/참조자) 목록을 조회합니다. 이름이나 이메일 주소로 검색할 수 있습니다. 특정 인물의 이메일 주소를 확인한 뒤 search_knowledge의 sender/recipient/participant 필터에 사용하세요.",
+  {
+    keyword: z
+      .string()
+      .optional()
+      .describe("이름 또는 이메일 주소 검색어"),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(500)
+      .default(20)
+      .describe("반환할 결과 수 (기본 20)"),
+  },
+  async ({ keyword, limit }) => {
+    const params = new URLSearchParams();
+    if (keyword) params.set("keyword", keyword);
+    params.set("limit", String(limit));
+
+    const data = (await apiFetch(`/contacts?${params}`)) as {
+      contacts: Array<{
+        email: string;
+        names: string[];
+        mail_count: number;
+      }>;
+    };
+
+    if (data.contacts.length === 0) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: keyword
+              ? `"${keyword}" 키워드에 해당하는 인물을 찾을 수 없습니다.`
+              : "등록된 이메일 인물이 없습니다.",
+          },
+        ],
+      };
+    }
+
+    const list = data.contacts
+      .map(
+        (c) =>
+          `- **${c.names.join(" / ") || "(이름 없음)"}** <${c.email}> (${c.mail_count}건)`
+      )
+      .join("\n");
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `이메일 인물 ${data.contacts.length}명\n\n${list}`,
+        },
+      ],
+    };
+  }
+);
+
+// Tool 6: get_search_filters
+server.tool(
+  "get_search_filters",
+  "검색에 사용할 수 있는 필터 옵션(데이터 소스, 콘텐츠 유형)을 조회합니다. search_knowledge의 source, source_type 파라미터에 사용할 값을 확인하세요.",
+  {},
+  async () => {
+    const data = (await apiFetch("/filters")) as {
+      sources: Array<{ value: string; count: number }>;
+      source_types: Array<{ value: string; count: number }>;
+    };
+
+    const sourceList = data.sources
+      .map((s) => `- **${s.value}** (${s.count}건)`)
+      .join("\n");
+
+    const typeList = data.source_types
+      .map((s) => `- **${s.value}** (${s.count}건)`)
+      .join("\n");
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `## 데이터 소스 (source)\n${sourceList || "없음"}\n\n## 콘텐츠 유형 (source_type)\n${typeList || "없음"}`,
         },
       ],
     };

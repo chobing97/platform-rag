@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 import httpx
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, PointStruct, PointIdsList, VectorParams
+from qdrant_client.models import Distance, PayloadSchemaType, PointStruct, PointIdsList, VectorParams
 
 from chunker import chunk_all, chunk_file
 from config import (
@@ -95,6 +95,28 @@ def _embed_batch(texts: list[str]) -> list[list[float]]:
 
 # ─── Qdrant ──────────────────────────────────────
 
+_PAYLOAD_INDEXES = {
+    "source": PayloadSchemaType.KEYWORD,
+    "source_type": PayloadSchemaType.KEYWORD,
+    "sender_email": PayloadSchemaType.KEYWORD,
+    "recipient_emails": PayloadSchemaType.KEYWORD,
+    "cc_emails": PayloadSchemaType.KEYWORD,
+}
+
+
+def _create_payload_indexes(client: QdrantClient):
+    """검색 필터용 payload 인덱스를 생성한다."""
+    for field, schema in _PAYLOAD_INDEXES.items():
+        try:
+            client.create_payload_index(
+                collection_name=QDRANT_COLLECTION,
+                field_name=field,
+                field_schema=schema,
+            )
+        except Exception:
+            pass  # 이미 존재하면 무시
+
+
 def _ensure_qdrant_collection(client: QdrantClient):
     """컬렉션이 없으면 생성."""
     collections = [c.name for c in client.get_collections().collections]
@@ -104,6 +126,7 @@ def _ensure_qdrant_collection(client: QdrantClient):
             vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
         )
         logger.info("Qdrant 컬렉션 생성: %s (dim=%d)", QDRANT_COLLECTION, EMBED_DIM)
+    _create_payload_indexes(client)
 
 
 def _reset_qdrant_collection(client: QdrantClient):
@@ -117,6 +140,7 @@ def _reset_qdrant_collection(client: QdrantClient):
         vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
     )
     logger.info("Qdrant 컬렉션 생성: %s (dim=%d)", QDRANT_COLLECTION, EMBED_DIM)
+    _create_payload_indexes(client)
 
 
 # ─── 변경 감지 ───────────────────────────────────
