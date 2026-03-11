@@ -20,7 +20,11 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data", "notion")
-MEDIA_DIR = os.path.join(DATA_DIR, "media")
+
+
+def _bucket_dir(page_id: str) -> str:
+    """page_id 앞 2자리 hex 기반 버킷 디렉토리."""
+    return os.path.join(DATA_DIR, page_id[:2])
 
 
 def _sanitize_filename(name: str) -> str:
@@ -84,10 +88,12 @@ def sync(full: bool = False):
             blocks = get_page_blocks(client, page_id)
             comments = get_page_comments(client, page_id)
 
-            # 미디어 다운로드 + OCR 텍스트 추출
-            media_count = process_media_blocks(blocks, page_id, MEDIA_DIR)
+            # 미디어 다운로드 (OCR은 별도 ocr 커맨드로 실행)
+            bucket = _bucket_dir(page_id)
+            media_dir = os.path.join(bucket, "media")
+            media_count = process_media_blocks(blocks, page_id, media_dir)
             if media_count:
-                logger.info("  미디어 처리: %d개 파일", media_count)
+                logger.info("  미디어 다운로드: %d개 파일", media_count)
 
             markdown = blocks_to_markdown(blocks)
             comments_md = comments_to_markdown(comments)
@@ -109,7 +115,8 @@ def sync(full: bool = False):
                 content += "\n\n---\n\n" + comments_md
 
             filename = f"{_sanitize_filename(title)}_{page_id[:8]}.md"
-            filepath = os.path.join(DATA_DIR, filename)
+            os.makedirs(bucket, exist_ok=True)
+            filepath = os.path.join(bucket, filename)
 
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(content)

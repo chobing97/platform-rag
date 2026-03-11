@@ -14,7 +14,6 @@ from daolemail.db import (
     start_sync_run,
     upsert_mail_state,
 )
-from daolemail.extract import extract_and_save
 from daolemail.login import get_cookies
 
 logging.basicConfig(
@@ -95,8 +94,15 @@ def _save_attachment(
     with open(raw_path, "wb") as f:
         f.write(data)
 
-    # 텍스트 추출 (이미지 → OCR, PDF → OCR, 텍스트 파일 → 직접 읽기)
-    extracted_text = extract_and_save(raw_path)
+    # OCR은 별도 ocr 커맨드로 실행. 기존 sidecar가 있으면 로드.
+    extracted_text = ""
+    sidecar = raw_path + ".txt"
+    if os.path.exists(sidecar):
+        try:
+            with open(sidecar, "r", encoding="utf-8") as f:
+                extracted_text = f.read().strip()
+        except Exception:
+            pass
 
     # 메타데이터 마크다운 (인덱싱용)
     md_filename = f"{_sanitize_filename(mail.subject)}_{mail.mail_idx}_att_{safe_name}.md"
@@ -122,7 +128,7 @@ def _save_attachment(
             f.write(extracted_text.strip())
             f.write("\n")
         else:
-            f.write(f"첨부파일: `{attachment.filename}` (텍스트 추출 불가)\n")
+            f.write(f"첨부파일: `{attachment.filename}` (OCR 미실행 — `./platformagent ocr` 실행 필요)\n")
 
     return md_path
 

@@ -5,6 +5,7 @@ import os
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 NOTION_DIR = os.path.join(DATA_DIR, "notion")
+DAOLEMAIL_DIR = os.path.join(DATA_DIR, "daolemail")
 
 # Qdrant
 QDRANT_URL = "http://localhost:6333"

@@ -13,6 +13,7 @@
 #   ./platformagent agent [--claude|--gemini] [-m MODEL]   AI Agent 대화형 모드
 #   ./platformagent agent-api [start|stop|restart|status]   Agent API 서버 (port 8001)
 #   ./platformagent sync [notion|email|all] [--full]   데이터 동기화
+#   ./platformagent ocr  [--workers N] [--max-size MB]  OCR 텍스트 추출 (Leader-Worker)
 #   ./platformagent index                              검색 인덱스 재구축 (Qdrant + BM25)
 
 set -e
@@ -278,6 +279,22 @@ sync_help() {
     echo ""
 }
 
+# ─── OCR ─────────────────────────────────────────────
+run_ocr() {
+    info "OCR 텍스트 추출 시작 (Leader-Worker)..."
+    cd "$ROOT_DIR/src/collectors"
+    .venv/bin/python -m ocr_worker "$@"
+    ok "OCR 텍스트 추출 완료"
+}
+
+# ─── Migrate ─────────────────────────────────────────
+run_migrate_notion() {
+    info "Notion 데이터 마이그레이션 (flat → bucket)..."
+    cd "$ROOT_DIR/src/collectors"
+    .venv/bin/python -m notion.migrate_to_buckets "$@"
+    ok "Notion 데이터 마이그레이션 완료"
+}
+
 # ─── Index ───────────────────────────────────────────
 run_index() {
     info "검색 인덱스 재구축 시작 (Qdrant + BM25)..."
@@ -390,6 +407,14 @@ case "${1:-help}" in
         ;;
     agent-api) svc_cmd agent_api "${2:-status}" ;;
     index) run_index ;;
+    ocr)
+        shift
+        run_ocr "$@"
+        ;;
+    migrate-notion)
+        shift
+        run_migrate_notion "$@"
+        ;;
     sync)
         case "${2:-}" in
             all)    sync_all "${3:-}" ;;
@@ -413,7 +438,9 @@ case "${1:-help}" in
         echo "  agent [--claude|--gemini] [-m MODEL]   AI Agent 대화형 모드"
         echo "  agent-api [start|stop|restart|status]   Agent API 서버 (port 8001)"
         echo "  index                                검색 인덱스 재구축 (Qdrant + BM25)"
+        echo "  ocr   [--workers N] [--max-size MB]  OCR 텍스트 추출 (Leader-Worker)"
         echo "  sync  [notion|email|all] [--full]   데이터 동기화"
+        echo "  migrate-notion [--dry-run]           Notion 데이터 bucket 구조 마이그레이션"
         echo ""
         ;;
 esac

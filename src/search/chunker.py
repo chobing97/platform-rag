@@ -4,7 +4,7 @@ import logging
 import os
 import re
 
-from config import CHUNK_OVERLAP, CHUNK_SIZE, NOTION_DIR
+from config import CHUNK_OVERLAP, CHUNK_SIZE, DAOLEMAIL_DIR, NOTION_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -101,17 +101,24 @@ def chunk_file(filepath: str) -> list[dict]:
 
         sub_chunks = _split_text(text, CHUNK_SIZE, CHUNK_OVERLAP)
         for i, chunk_text in enumerate(sub_chunks):
+            source = meta.get("source", "notion")
             chunk_meta = {
-                "source": "notion",
+                "source": source,
                 "file_path": filepath,
                 "file_name": os.path.basename(filepath),
-                "title": meta.get("title", ""),
-                "notion_id": meta.get("notion_id", ""),
-                "url": meta.get("url", ""),
+                "title": meta.get("title", meta.get("subject", "")),
                 "heading": section["heading"],
                 "chunk_index": i,
-                "source_type": section.get("source_type", "document"),
+                "source_type": section.get("source_type", meta.get("content_type", "document")),
             }
+            # source별 추가 메타데이터
+            if source == "notion":
+                chunk_meta["notion_id"] = meta.get("notion_id", "")
+                chunk_meta["url"] = meta.get("url", "")
+            elif source == "daolemail":
+                chunk_meta["mail_idx"] = meta.get("mail_idx", "")
+                chunk_meta["sender"] = meta.get("sender", "")
+                chunk_meta["date"] = meta.get("date", "")
             if section.get("source_file"):
                 chunk_meta["source_file"] = section["source_file"]
             chunks.append({
@@ -122,19 +129,37 @@ def chunk_file(filepath: str) -> list[dict]:
     return chunks
 
 
+def _collect_md_files(base_dir: str) -> list[str]:
+    """base_dir 하위의 모든 .md 파일 경로를 재귀적으로 수집한다."""
+    files = []
+    if not os.path.isdir(base_dir):
+        return files
+    for root, _dirs, fnames in os.walk(base_dir):
+        for fname in fnames:
+            if fname.endswith(".md"):
+                files.append(os.path.join(root, fname))
+    return files
+
+
 def chunk_all() -> list[dict]:
-    """data/notion/ 내 모든 Markdown 파일을 청크로 분할한다."""
+    """data/notion/ + data/daolemail/ 내 모든 Markdown 파일을 청크로 분할한다."""
     all_chunks = []
 
-    if not os.path.isdir(NOTION_DIR):
-        logger.warning("Notion 데이터 디렉토리 없음: %s", NOTION_DIR)
+    # Notion + DAOL Email 디렉토리 모두 스캔
+    files = []
+    for data_dir in (NOTION_DIR, DAOLEMAIL_DIR):
+        found = _collect_md_files(data_dir)
+        if found:
+            logger.info("%s: %d개 파일 발견", os.path.basename(data_dir), len(found))
+        files.extend(found)
+
+    if not files:
+        logger.warning("청크 분할 대상 파일이 없습니다.")
         return all_chunks
 
-    files = [f for f in os.listdir(NOTION_DIR) if f.endswith(".md")]
-    logger.info("청크 분할 대상: %d개 파일", len(files))
+    logger.info("청크 분할 대상: 총 %d개 파일", len(files))
 
-    for i, fname in enumerate(files, 1):
-        filepath = os.path.join(NOTION_DIR, fname)
+    for i, filepath in enumerate(files, 1):
         chunks = chunk_file(filepath)
         all_chunks.extend(chunks)
         if i % 500 == 0:

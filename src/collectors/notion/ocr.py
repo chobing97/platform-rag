@@ -135,10 +135,10 @@ def get_filename_from_url(url: str) -> str:
 # ─── 블록 미디어 처리 ──────────────────────────────
 
 def process_media_blocks(blocks: list[dict], page_id: str, media_dir: str) -> int:
-    """블록 목록에서 미디어를 다운로드하고 텍스트를 추출한다.
+    """블록 목록에서 미디어를 다운로드한다. OCR은 별도 ocr 커맨드로 실행.
 
-    추출된 텍스트는 각 블록의 '_extracted_text' 키에 저장된다.
     다운로드된 파일 경로는 '_local_path' 키에 저장된다.
+    기존 .txt sidecar가 있으면 '_extracted_text'에 로드한다.
 
     Returns:
         처리된 미디어 블록 수.
@@ -165,20 +165,16 @@ def process_media_blocks(blocks: list[dict], page_id: str, media_dir: str) -> in
             block["_local_path"] = save_path
             count += 1
 
-            # 텍스트 추출
-            ext_lower = ext.lower()
-            if ext_lower in IMAGE_EXTENSIONS:
-                text = extract_text_from_image(save_path)
-            elif ext_lower in PDF_EXTENSIONS or block_type == "pdf":
-                text = extract_text_from_pdf(save_path)
-            else:
-                text = ""
-
-            if text:
-                block["_extracted_text"] = text.strip()
-                logger.info(
-                    "텍스트 추출 완료: %s (%d자)", os.path.basename(save_path), len(text)
-                )
+            # 기존 OCR sidecar가 있으면 로드 (마크다운 생성용)
+            sidecar = save_path + ".txt"
+            if os.path.exists(sidecar):
+                try:
+                    with open(sidecar, "r", encoding="utf-8") as f:
+                        text = f.read().strip()
+                    if text:
+                        block["_extracted_text"] = text
+                except Exception:
+                    pass
 
         # 하위 블록 재귀 처리
         if block.get("children"):
