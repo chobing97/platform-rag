@@ -1,10 +1,15 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 
 const AGENT_API_URL = typeof window !== "undefined" ? `http://${window.location.hostname}:8001` : "http://localhost:8001";
+const SEARCH_API_URL = typeof window !== "undefined" ? `http://${window.location.hostname}:8000` : "http://localhost:8000";
+
+const SESSION_KEY = "agent_session_id";
+const PAGE_SIZE = 5;
 
 interface ChatMessage {
+  id?: number;
   role: "user" | "assistant";
   content: string;
 }
@@ -18,8 +23,21 @@ interface StatusEvent {
 
 type ModelsMap = Record<string, string[]>;
 
-function generateSessionId() {
-  return crypto.randomUUID();
+function getOrCreateSessionId(): string {
+  if (typeof window === "undefined") return crypto.randomUUID();
+  const stored = localStorage.getItem(SESSION_KEY);
+  if (stored) return stored;
+  const id = crypto.randomUUID();
+  localStorage.setItem(SESSION_KEY, id);
+  return id;
+}
+
+function saveMessage(sessionId: string, role: string, content: string) {
+  fetch(`${SEARCH_API_URL}/chat/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, role, content }),
+  }).catch(() => {});
 }
 
 export default function AgentChatPanel() {
@@ -30,8 +48,13 @@ export default function AgentChatPanel() {
   const [models, setModels] = useState<ModelsMap>({});
   const [selectedProvider, setSelectedProvider] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
-  const [sessionId, setSessionId] = useState(() => generateSessionId());
+  const [sessionId, setSessionId] = useState(() => getOrCreateSessionId());
+  const [hasMore, setHasMore] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(true);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesAreaRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // 모델 목록 로드
@@ -50,13 +73,80 @@ export default function AgentChatPanel() {
       .catch(() => {});
   }, []);
 
+  // 초기 대화 복원
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, statusEvents]);
+    fetch(`${SEARCH_API_URL}/chat/messages/${sessionId}?limit=${PAGE_SIZE}`)
+      .then((res) => res.json())
+      .then((data: { messages: ChatMessage[]; has_more: boolean }) => {
+        if (data.messages.length > 0) {
+          setMessages(data.messages);
+          setHasMore(data.has_more);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setIsRestoring(false));
+  }, [sessionId]);
+
+  // 새 메시지 시 스크롤 아래로 (복원 완료 후에만)
+  useEffect(() => {
+    if (!isRestoring) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages, statusEvents, isRestoring]);
+
+  // 복원 완료 직후 스크롤 아래로 (한 번만)
+  useEffect(() => {
+    if (!isRestoring && messages.length > 0) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRestoring]);
 
   useEffect(() => {
     if (!isLoading) inputRef.current?.focus();
   }, [isLoading]);
+
+  // 스크롤 상단 도달 시 이전 메시지 로드
+  const loadOlderMessages = useCallback(async () => {
+    if (!hasMore || isLoadingMore || messages.length === 0) return;
+    const oldestId = messages[0]?.id;
+    if (oldestId == null) return;
+
+    setIsLoadingMore(true);
+    const area = messagesAreaRef.current;
+    const prevScrollHeight = area?.scrollHeight ?? 0;
+
+    try {
+      const res = await fetch(
+        `${SEARCH_API_URL}/chat/messages/${sessionId}?limit=${PAGE_SIZE}&before_id=${oldestId}`
+      );
+      const data: { messages: ChatMessage[]; has_more: boolean } = await res.json();
+      if (data.messages.length > 0) {
+        setMessages((prev) => [...data.messages, ...prev]);
+        setHasMore(data.has_more);
+        // 스크롤 위치 보정: prepend 후 기존 위치 유지
+        requestAnimationFrame(() => {
+          if (area) {
+            area.scrollTop = area.scrollHeight - prevScrollHeight;
+          }
+        });
+      } else {
+        setHasMore(false);
+      }
+    } catch {
+      // 네트워크 에러 시 무시
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [hasMore, isLoadingMore, messages, sessionId]);
+
+  const handleScroll = useCallback(() => {
+    const area = messagesAreaRef.current;
+    if (!area) return;
+    if (area.scrollTop < 50 && hasMore && !isLoadingMore) {
+      loadOlderMessages();
+    }
+  }, [hasMore, isLoadingMore, loadOlderMessages]);
 
   const handleProviderChange = (provider: string) => {
     setSelectedProvider(provider);
@@ -71,6 +161,7 @@ export default function AgentChatPanel() {
 
     setInput("");
     setMessages((prev) => [...prev, { role: "user", content: query }]);
+    saveMessage(sessionId, "user", query);
     setStatusEvents([]);
     setIsLoading(true);
 
@@ -114,6 +205,16 @@ export default function AgentChatPanel() {
                 { role: "assistant", content: data.text },
               ]);
               setStatusEvents([]);
+              saveMessage(sessionId, "assistant", data.text);
+              fetch(`${SEARCH_API_URL}/log/chat`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  session_id: sessionId,
+                  provider: selectedProvider || "unknown",
+                  model: selectedModel || "",
+                }),
+              }).catch(() => {});
             } else if (data.type === "error") {
               setMessages((prev) => [
                 ...prev,
@@ -152,9 +253,12 @@ export default function AgentChatPanel() {
         }),
       });
     } catch {}
-    setSessionId(generateSessionId());
+    const newId = crypto.randomUUID();
+    localStorage.setItem(SESSION_KEY, newId);
+    setSessionId(newId);
     setMessages([]);
     setStatusEvents([]);
+    setHasMore(false);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -201,8 +305,27 @@ export default function AgentChatPanel() {
       </div>
 
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto space-y-4 pb-4">
-        {messages.length === 0 && !isLoading && (
+      <div
+        ref={messagesAreaRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto space-y-4 pb-4"
+      >
+        {/* Load More Indicator */}
+        {isLoadingMore && (
+          <div className="text-center text-xs text-gray-400 py-2">
+            이전 대화 불러오는 중...
+          </div>
+        )}
+        {hasMore && !isLoadingMore && (
+          <button
+            onClick={loadOlderMessages}
+            className="w-full text-center text-xs text-gray-400 py-2 hover:text-gray-600"
+          >
+            이전 대화 더 보기
+          </button>
+        )}
+
+        {messages.length === 0 && !isLoading && !isRestoring && (
           <div className="flex items-center justify-center h-full text-gray-400">
             <div className="text-center">
               <div className="text-4xl mb-4">&#x1F9E0;</div>
@@ -214,9 +337,15 @@ export default function AgentChatPanel() {
           </div>
         )}
 
+        {isRestoring && (
+          <div className="flex items-center justify-center h-full text-gray-400 text-sm">
+            대화 복원 중...
+          </div>
+        )}
+
         {messages.map((msg, i) => (
           <div
-            key={i}
+            key={msg.id ?? `local-${i}`}
             className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
           >
             <div

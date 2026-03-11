@@ -6,10 +6,11 @@ import SearchBar from "@/components/SearchBar";
 import ResultCard from "@/components/ResultCard";
 import ApiTestPanel from "@/components/ApiTestPanel";
 import McpTestPanel from "@/components/McpTestPanel";
+import DashboardPanel from "@/components/DashboardPanel";
 
 const API_URL = typeof window !== "undefined" ? `http://${window.location.hostname}:8000` : "http://localhost:8000";
 
-type Tab = "agent" | "search" | "api" | "mcp";
+type Tab = "agent" | "search" | "api" | "mcp" | "dashboard";
 
 interface SearchResult {
   id: string;
@@ -85,6 +86,7 @@ export default function Home() {
     { key: "search", label: "검색" },
     { key: "api", label: "API 테스트" },
     { key: "mcp", label: "MCP 테스트" },
+    { key: "dashboard", label: "대시보드" },
   ];
 
   return (
@@ -181,6 +183,9 @@ export default function Home() {
 
       {/* MCP Test Tab */}
       {tab === "mcp" && <McpTestPanel />}
+
+      {/* Dashboard Tab */}
+      {tab === "dashboard" && <DashboardPanel />}
     </main>
   );
 }
