@@ -221,6 +221,8 @@ status_agent_api() {
 # ─── Sync ─────────────────────────────────────────────
 sync_notion() {
     local mode="${1:-}"
+    local notionLog="$LOG_DIR/notion_sync.log"
+
     cd "$ROOT_DIR/src/collectors"
     if [ "$mode" = "--full" ]; then
         info "Notion 전체 동기화 시작..."
@@ -228,12 +230,14 @@ sync_notion() {
     else
         info "Notion 증분 동기화 시작..."
         .venv/bin/python -m notion.sync
-    fi
+    fi | tee >> "$notionLog" 2>&1
     ok "Notion 동기화 완료"
 }
 
 sync_email() {
     local mode="${1:-}"
+    local emailLog="$LOG_DIR/email_sync.log"
+
     cd "$ROOT_DIR/src/collectors"
     if [ "$mode" = "--full" ]; then
         info "DAOL 이메일 전체 동기화 시작..."
@@ -241,7 +245,7 @@ sync_email() {
     else
         info "DAOL 이메일 증분 동기화 시작..."
         .venv/bin/python -m daolemail.sync
-    fi
+    fi | tee >> "$emailLog" 2>&1
     ok "DAOL 이메일 동기화 완료"
 }
 
