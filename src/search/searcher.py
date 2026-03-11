@@ -8,6 +8,7 @@ import sqlite3
 import httpx
 import MeCab
 from qdrant_client import QdrantClient
+from dataclasses import dataclass
 from rank_bm25 import BM25Okapi
 
 from config import (
@@ -28,9 +29,15 @@ logger = logging.getLogger(__name__)
 
 BM25_DB = os.path.join(INDEX_DIR, "bm25_corpus.db")
 
-# 모듈 수준 캐시 — API 서버 기동 시 한 번만 로드
-_bm25_index: BM25Okapi | None = None
-_bm25_corpus: list[dict] | None = None  # [{id, text, metadata}, ...]
+
+@dataclass
+class _BM25State:
+    index: BM25Okapi
+    corpus: list[dict]  # [{id, text, metadata}, ...]
+
+
+# 모듈 수준 캐시 — 단일 객체로 atomic swap 보장
+_bm25: _BM25State | None = None
 _reranker = None
 
 
@@ -43,26 +50,37 @@ def _tokenize(text: str) -> list[str]:
     return [line.split("\t")[0] for line in parsed.splitlines() if "\t" in line]
 
 
-def _load_bm25():
-    """SQLite에서 BM25 코퍼스를 로드하여 인덱스를 구축한다."""
-    global _bm25_index, _bm25_corpus
-
-    if _bm25_index is not None:
-        return
-
+def _build_bm25_state() -> _BM25State:
+    """SQLite에서 BM25 코퍼스를 로드하여 인덱스를 빌드한다."""
     conn = sqlite3.connect(BM25_DB)
     conn.row_factory = sqlite3.Row
     rows = conn.execute("SELECT id, text, metadata FROM chunks").fetchall()
     conn.close()
 
-    _bm25_corpus = [
+    corpus = [
         {"id": r["id"], "text": r["text"], "metadata": json.loads(r["metadata"])}
         for r in rows
     ]
-    tokenized = [_tokenize(doc["text"]) for doc in _bm25_corpus]
-    _bm25_index = BM25Okapi(tokenized)
+    tokenized = [_tokenize(doc["text"]) for doc in corpus]
+    index = BM25Okapi(tokenized) if corpus else None
+    return _BM25State(index=index, corpus=corpus)
 
-    logger.info("BM25 인덱스 로드 완료: %d개 문서", len(_bm25_corpus))
+
+def _load_bm25():
+    """BM25 인덱스를 초기 로드한다 (이미 로드됐으면 스킵)."""
+    global _bm25
+    if _bm25 is not None:
+        return
+    _bm25 = _build_bm25_state()
+    logger.info("BM25 인덱스 로드 완료: %d개 문서", len(_bm25.corpus))
+
+
+def reload_bm25():
+    """BM25 인덱스를 핫 리로드한다. 검색 중단 없이 atomic swap."""
+    global _bm25
+    new_state = _build_bm25_state()
+    _bm25 = new_state  # GIL 보호 — 단일 STORE_GLOBAL
+    logger.info("BM25 핫 리로드 완료: %d개 문서", len(new_state.corpus))
 
 
 def _get_device() -> str:
@@ -130,20 +148,23 @@ def _vector_search(query_vec: list[float], top_k: int, source_type: str | None =
 def _bm25_search(query: str, top_k: int, source_type: str | None = None) -> list[dict]:
     """BM25 키워드 검색."""
     _load_bm25()
+    state = _bm25  # 로컬 참조 — swap 중에도 일관성 보장
+    if state is None or state.index is None:
+        return []
     tokens = _tokenize(query)
-    scores = _bm25_index.get_scores(tokens)
+    scores = state.index.get_scores(tokens)
 
     top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
     results = []
     for i in top_indices:
         if scores[i] <= 0:
             break
-        if source_type and _bm25_corpus[i]["metadata"].get("source_type") != source_type:
+        if source_type and state.corpus[i]["metadata"].get("source_type") != source_type:
             continue
         results.append({
-            "id": _bm25_corpus[i]["id"],
-            "text": _bm25_corpus[i]["text"],
-            "metadata": _bm25_corpus[i]["metadata"],
+            "id": state.corpus[i]["id"],
+            "text": state.corpus[i]["text"],
+            "metadata": state.corpus[i]["metadata"],
             "score": float(scores[i]),
         })
         if len(results) >= top_k:
@@ -241,9 +262,12 @@ def get_document(doc_id: str) -> dict | None:
 def list_sources(source_type: str | None = None, keyword: str | None = None) -> list[dict]:
     """문서 목록을 조회한다. BM25 코퍼스에서 고유 파일 기준으로 집계."""
     _load_bm25()
+    state = _bm25
+    if state is None:
+        return []
 
     seen: dict[str, dict] = {}
-    for doc in _bm25_corpus:
+    for doc in state.corpus:
         file_name = doc["metadata"].get("file_name", doc["id"])
 
         if source_type and doc["metadata"].get("source") != source_type:

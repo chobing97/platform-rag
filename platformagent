@@ -289,11 +289,16 @@ run_ocr() {
 
 # ─── Index ───────────────────────────────────────────
 run_index() {
-    info "검색 인덱스 재구축 시작 (Qdrant + BM25)..."
+    info "검색 인덱스 갱신 중..."
     cd "$ROOT_DIR/src/search"
     MECABRC=/opt/homebrew/etc/mecabrc \
-        .venv/bin/python indexer.py
-    ok "검색 인덱스 재구축 완료"
+        .venv/bin/python indexer.py "$@"
+    # API 서버가 실행 중이면 BM25 핫 리로드
+    if check_port 8000; then
+        curl -s -X POST http://localhost:8000/admin/reload-bm25 > /dev/null
+        ok "BM25 핫 리로드 완료"
+    fi
+    ok "검색 인덱스 갱신 완료"
 }
 
 # ─── Status ───────────────────────────────────────────
@@ -398,7 +403,10 @@ case "${1:-help}" in
         agent/.venv/bin/python -m agent "$@"
         ;;
     agent-api) svc_cmd agent_api "${2:-status}" ;;
-    index) run_index ;;
+    index)
+        shift
+        run_index "$@"
+        ;;
     ocr)
         shift
         run_ocr "$@"
@@ -425,7 +433,7 @@ case "${1:-help}" in
         echo "  web   [start|stop|restart|status]   Next.js 검색 UI (port 3000)"
         echo "  agent [--claude|--gemini] [-m MODEL]   AI Agent 대화형 모드"
         echo "  agent-api [start|stop|restart|status]   Agent API 서버 (port 8001)"
-        echo "  index                                검색 인덱스 재구축 (Qdrant + BM25)"
+        echo "  index [--full]                       검색 인덱스 갱신 (기본: 증분)"
         echo "  ocr   [--workers N] [--max-size MB]  OCR 텍스트 추출 (Leader-Worker)"
         echo "  sync  [notion|email|all] [--full]   데이터 동기화"
         echo ""

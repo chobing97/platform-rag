@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from click_log import log_click
-from searcher import search, get_document, list_sources, get_related
+from searcher import search, get_document, list_sources, get_related, reload_bm25
 
 logging.basicConfig(
     level=logging.INFO,
@@ -99,6 +99,13 @@ def related_endpoint(
     top_k: int = Query(5, ge=1, le=20, description="관련 문서 수"),
 ):
     return {"results": get_related(doc_id, top_k=top_k)}
+
+
+@app.post("/admin/reload-bm25")
+def reload_bm25_endpoint():
+    """BM25 인덱스를 핫 리로드한다. 검색 중단 없이 atomic swap."""
+    reload_bm25()
+    return {"status": "ok"}
 
 
 @app.get("/health")
