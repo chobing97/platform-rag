@@ -61,175 +61,145 @@ function buildZodSchema(params: ToolParam[]): Record<string, z.ZodTypeAny> {
   return schema;
 }
 
-// ─── API 호출 헬퍼 ─────────────────────────────────────
+// ─── 제네릭 API 호출 (tools_spec.json의 api 섹션 기반) ────
 
-async function apiFetch(path: string): Promise<unknown> {
-  const res = await fetch(`${API_URL}${path}`);
+type ToolInput = Record<string, unknown>;
+
+async function executeApiCall(spec: ToolSpec, input: ToolInput): Promise<unknown> {
+  // 1. path param 치환
+  let path = spec.api.path;
+  const pathParams = new Set<string>();
+  for (const key of Object.keys(input)) {
+    if (path.includes(`{${key}}`)) {
+      path = path.replace(`{${key}}`, String(input[key]));
+      pathParams.add(key);
+    }
+  }
+
+  // 2. 나머지 인자 구성 (path param 제외, null/undefined 제외, rename 적용)
+  const rename = spec.api.param_rename ?? {};
+  const rest = Object.fromEntries(
+    Object.entries(input)
+      .filter(([k, v]) => !pathParams.has(k) && v != null)
+      .map(([k, v]) => [rename[k] ?? k, v])
+  );
+
+  const url = `${API_URL}${path}`;
+  const method = spec.api.method;
+
+  let res: Response;
+  if (method === "GET") {
+    const qs = new URLSearchParams(rest as Record<string, string>).toString();
+    res = await fetch(`${url}${qs ? `?${qs}` : ""}`);
+  } else {
+    res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(rest),
+    });
+  }
+
   if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
   return res.json();
 }
 
-// ─── 도구 핸들러 ──────────────────────────────────────
+// ─── 응답 포맷 헬퍼 ────────────────────────────────────
 
-type ToolInput = Record<string, unknown>;
-type ToolResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
+function text(t: string) {
+  return { content: [{ type: "text" as const, text: t }] };
+}
 
-const HANDLERS: Record<string, (input: ToolInput) => Promise<ToolResult>> = {
-  search_knowledge: async (input) => {
-    const { query, top_k, rerank, source, source_type, sender, recipient, participant, direction } = input;
-    const params = new URLSearchParams({
-      q: String(query),
-      top_k: String(top_k),
-      rerank: String(rerank),
-    });
-    if (source) params.set("source", String(source));
-    if (source_type) params.set("source_type", String(source_type));
-    if (sender) params.set("sender", String(sender));
-    if (recipient) params.set("recipient", String(recipient));
-    if (participant) params.set("participant", String(participant));
-    if (direction) params.set("direction", String(direction));
-
-    const data = (await apiFetch(`/search?${params}`)) as {
-      query: string;
-      count: number;
-      results: Array<{
-        id: string;
-        text: string;
-        metadata: Record<string, string>;
-        rrf_score: number | null;
-        rerank_score: number | null;
-      }>;
-      timings: Record<string, number>;
-    };
-
-    if (data.count === 0) {
-      return { content: [{ type: "text", text: `"${query}" 검색 결과가 없습니다. 다른 키워드로 다시 검색해 주세요.` }] };
-    }
-
-    const resultText = data.results
-      .map((r, i) => {
-        const meta = r.metadata;
-        const info = [
-          meta.title && `제목: ${meta.title}`,
-          meta.source && `출처: ${meta.source}`,
-          meta.file_name && `파일: ${meta.file_name}`,
-          meta.url && `URL: ${meta.url}`,
-          r.rrf_score != null && `RRF: ${r.rrf_score.toFixed(4)}`,
-          r.rerank_score != null && `Rerank: ${r.rerank_score.toFixed(3)}`,
-        ].filter(Boolean).join(" | ");
-        return `### [${i + 1}] ${meta.title || "제목 없음"} (ID: ${r.id})\n${info}\n\n${r.text}`;
-      })
-      .join("\n\n---\n\n");
-
-    return {
-      content: [{
-        type: "text",
-        text: `"${data.query}" 검색 결과 ${data.count}건 (${data.timings.total.toFixed(1)}초)\n\n${resultText}`,
-      }],
-    };
-  },
-
-  get_document: async ({ doc_id }) => {
-    try {
-      const data = (await apiFetch(`/document/${doc_id}`)) as {
-        id: string;
-        text: string;
-        metadata: Record<string, string>;
-      };
-      const meta = Object.entries(data.metadata).map(([k, v]) => `${k}: ${v}`).join("\n");
-      return { content: [{ type: "text", text: `## 문서 메타데이터\n${meta}\n\n## 내용\n${data.text}` }] };
-    } catch {
-      return { content: [{ type: "text", text: `문서 ID "${doc_id}"를 찾을 수 없습니다.` }], isError: true };
-    }
-  },
-
-  list_sources: async ({ source_type, keyword }) => {
-    const params = new URLSearchParams();
-    if (source_type) params.set("source_type", String(source_type));
-    if (keyword) params.set("keyword", String(keyword));
-    const qs = params.toString();
-
-    const data = (await apiFetch(`/sources${qs ? `?${qs}` : ""}`)) as {
-      sources: Array<{ file_name: string; title: string; source: string; url: string; chunk_count: number }>;
-    };
-
-    if (data.sources.length === 0) {
-      return { content: [{ type: "text", text: "조건에 맞는 문서가 없습니다." }] };
-    }
-
-    const list = data.sources
-      .map((s) => `- **${s.title || s.file_name}** (${s.source || "unknown"}, ${s.chunk_count}개 청크)${s.url ? ` [링크](${s.url})` : ""}`)
-      .join("\n");
-    return { content: [{ type: "text", text: `총 ${data.sources.length}개 문서\n\n${list}` }] };
-  },
-
-  get_related: async ({ doc_id, top_k }) => {
-    const data = (await apiFetch(`/related/${doc_id}?top_k=${top_k}`)) as {
-      results: Array<{ id: string; text: string; metadata: Record<string, string>; score: number }>;
-    };
-
-    if (data.results.length === 0) {
-      return { content: [{ type: "text", text: `문서 "${doc_id}"의 관련 문서를 찾을 수 없습니다.` }] };
-    }
-
-    const list = data.results
-      .map((r, i) => `### [${i + 1}] ${r.metadata.title || "제목 없음"} (ID: ${r.id})\n유사도: ${r.score.toFixed(4)}\n\n${r.text}`)
-      .join("\n\n---\n\n");
-    return { content: [{ type: "text", text: `관련 문서 ${data.results.length}건\n\n${list}` }] };
-  },
-
-  list_email_contacts: async ({ keyword, limit }) => {
-    const params = new URLSearchParams();
-    if (keyword) params.set("keyword", String(keyword));
-    params.set("limit", String(limit));
-
-    const data = (await apiFetch(`/contacts?${params}`)) as {
-      contacts: Array<{ email: string; names: string[]; mail_count: number }>;
-    };
-
-    if (data.contacts.length === 0) {
-      return {
-        content: [{
-          type: "text",
-          text: keyword ? `"${keyword}" 키워드에 해당하는 인물을 찾을 수 없습니다.` : "등록된 이메일 인물이 없습니다.",
-        }],
-      };
-    }
-
-    const list = data.contacts
-      .map((c) => `- **${c.names.join(" / ") || "(이름 없음)"}** <${c.email}> (${c.mail_count}건)`)
-      .join("\n");
-    return { content: [{ type: "text", text: `이메일 인물 ${data.contacts.length}명\n\n${list}` }] };
-  },
-
-  get_search_filters: async () => {
-    const data = (await apiFetch("/filters")) as {
-      sources: Array<{ value: string; count: number }>;
-      source_types: Array<{ value: string; count: number }>;
-    };
-    const sourceList = data.sources.map((s) => `- **${s.value}** (${s.count}건)`).join("\n");
-    const typeList = data.source_types.map((s) => `- **${s.value}** (${s.count}건)`).join("\n");
-    return {
-      content: [{
-        type: "text",
-        text: `## 데이터 소스 (source)\n${sourceList || "없음"}\n\n## 콘텐츠 유형 (source_type)\n${typeList || "없음"}`,
-      }],
-    };
-  },
-};
-
-// ─── MCP 서버 + 도구 동적 등록 ────────────────────────
+// ─── MCP 서버 + 도구 등록 ──────────────────────────────
 
 const server = new McpServer({ name: "platform-rag", version: "0.1.0" });
 
-for (const tool of TOOLS_SPEC) {
-  const handler = HANDLERS[tool.name];
-  if (!handler) {
-    console.error(`[경고] 핸들러 없음: ${tool.name}`);
-    continue;
+for (const spec of TOOLS_SPEC) {
+  server.registerTool(
+    spec.name,
+    { description: spec.description, inputSchema: buildZodSchema(spec.parameters) },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (async (input: ToolInput) => {
+      try {
+        const data = await executeApiCall(spec, input);
+        return formatResponse(spec.name, input, data);
+      } catch (err) {
+        return { ...text(`오류: ${String(err)}`), isError: true };
+      }
+    }) as any
+  );
+}
+
+function formatResponse(name: string, input: ToolInput, data: unknown) {
+  switch (name) {
+    case "search_knowledge": {
+      const d = data as {
+        query: string; count: number;
+        results: Array<{ id: string; text: string; metadata: Record<string, string>; rrf_score: number | null; rerank_score: number | null }>;
+        timings: Record<string, number>;
+      };
+      if (d.count === 0) return text(`"${input.query}" 검색 결과가 없습니다. 다른 키워드로 다시 검색해 주세요.`);
+
+      const resultText = d.results.map((r, i) => {
+        const m = r.metadata;
+        const info = [
+          m.title && `제목: ${m.title}`,
+          m.source && `출처: ${m.source}`,
+          m.file_name && `파일: ${m.file_name}`,
+          m.url && `URL: ${m.url}`,
+          r.rrf_score != null && `RRF: ${r.rrf_score.toFixed(4)}`,
+          r.rerank_score != null && `Rerank: ${r.rerank_score.toFixed(3)}`,
+        ].filter(Boolean).join(" | ");
+        return `### [${i + 1}] ${m.title || "제목 없음"} (ID: ${r.id})\n${info}\n\n${r.text}`;
+      }).join("\n\n---\n\n");
+
+      return text(`"${d.query}" 검색 결과 ${d.count}건 (${d.timings.total.toFixed(1)}초)\n\n${resultText}`);
+    }
+
+    case "get_document": {
+      const d = data as { id: string; text: string; metadata: Record<string, string> };
+      const meta = Object.entries(d.metadata).map(([k, v]) => `${k}: ${v}`).join("\n");
+      return text(`## 문서 메타데이터\n${meta}\n\n## 내용\n${d.text}`);
+    }
+
+    case "list_sources": {
+      const d = data as { sources: Array<{ file_name: string; title: string; source: string; url: string; chunk_count: number }> };
+      if (d.sources.length === 0) return text("조건에 맞는 문서가 없습니다.");
+      const list = d.sources
+        .map((s) => `- **${s.title || s.file_name}** (${s.source || "unknown"}, ${s.chunk_count}개 청크)${s.url ? ` [링크](${s.url})` : ""}`)
+        .join("\n");
+      return text(`총 ${d.sources.length}개 문서\n\n${list}`);
+    }
+
+    case "get_related": {
+      const d = data as { results: Array<{ id: string; text: string; metadata: Record<string, string>; score: number }> };
+      if (d.results.length === 0) return text(`문서 "${input.doc_id}"의 관련 문서를 찾을 수 없습니다.`);
+      const list = d.results
+        .map((r, i) => `### [${i + 1}] ${r.metadata.title || "제목 없음"} (ID: ${r.id})\n유사도: ${r.score.toFixed(4)}\n\n${r.text}`)
+        .join("\n\n---\n\n");
+      return text(`관련 문서 ${d.results.length}건\n\n${list}`);
+    }
+
+    case "list_email_contacts": {
+      const d = data as { contacts: Array<{ email: string; names: string[]; mail_count: number }> };
+      if (d.contacts.length === 0) {
+        return text(input.keyword ? `"${input.keyword}" 키워드에 해당하는 인물을 찾을 수 없습니다.` : "등록된 이메일 인물이 없습니다.");
+      }
+      const list = d.contacts
+        .map((c) => `- **${c.names.join(" / ") || "(이름 없음)"}** <${c.email}> (${c.mail_count}건)`)
+        .join("\n");
+      return text(`이메일 인물 ${d.contacts.length}명\n\n${list}`);
+    }
+
+    case "get_search_filters": {
+      const d = data as { sources: Array<{ value: string; count: number }>; source_types: Array<{ value: string; count: number }> };
+      const sourceList = d.sources.map((s) => `- **${s.value}** (${s.count}건)`).join("\n");
+      const typeList = d.source_types.map((s) => `- **${s.value}** (${s.count}건)`).join("\n");
+      return text(`## 데이터 소스 (source)\n${sourceList || "없음"}\n\n## 콘텐츠 유형 (source_type)\n${typeList || "없음"}`);
+    }
+
+    default:
+      return { ...text(`알 수 없는 도구: ${name}`), isError: true };
   }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  server.registerTool(tool.name, { description: tool.description, inputSchema: buildZodSchema(tool.parameters) }, handler as any);
 }
 
 // ─── 서버 시작 ────────────────────────────────────────
