@@ -96,6 +96,7 @@ def _save_body_markdown(
     mail: MailSummary,
     body: str,
     mbox_idx: int,
+    mbox_name: str,
     attachment_filenames: list[str],
     recipients: list[str] | None = None,
     cc: list[str] | None = None,
@@ -114,11 +115,14 @@ def _save_body_markdown(
     cc_emails = _extract_emails(cc or [])
 
     with open(filepath, "w", encoding="utf-8") as f:
+        direction = "sent" if mbox_idx == 3 else "received"
         f.write("---\n")
         f.write(f"source: daolemail\n")
         f.write(f"content_type: email_body\n")
         f.write(f"mail_idx: {mail.mail_idx}\n")
         f.write(f"mbox_idx: {mbox_idx}\n")
+        f.write(f'mbox_name: "{mbox_name}"\n')
+        f.write(f"direction: {direction}\n")
         f.write(f'subject: "{mail.subject}"\n')
         f.write(f'sender: "{mail.sender}"\n')
         f.write(f'sender_email: "{sender_email}"\n')
@@ -149,6 +153,7 @@ def _save_body_markdown(
 def _save_attachment(
     mail: MailSummary,
     mbox_idx: int,
+    mbox_name: str,
     attachment: AttachmentInfo,
     data: bytes,
     recipients: list[str] | None = None,
@@ -179,15 +184,20 @@ def _save_attachment(
     recipient_emails = _extract_emails(recipients or [])
     cc_emails = _extract_emails(cc or [])
 
+    file_size = len(data)
+
     # 메타데이터 마크다운 (인덱싱용)
     md_filename = f"{_sanitize_filename(mail.subject)}_{mail.mail_idx}_att_{safe_name}.md"
     md_path = os.path.join(bucket, md_filename)
+    direction = "sent" if mbox_idx == 3 else "received"
     with open(md_path, "w", encoding="utf-8") as f:
         f.write("---\n")
         f.write(f"source: daolemail\n")
         f.write(f"content_type: email_attachment\n")
         f.write(f"mail_idx: {mail.mail_idx}\n")
         f.write(f"mbox_idx: {mbox_idx}\n")
+        f.write(f'mbox_name: "{mbox_name}"\n')
+        f.write(f"direction: {direction}\n")
         f.write(f'subject: "{mail.subject}"\n')
         f.write(f'sender: "{mail.sender}"\n')
         f.write(f'sender_email: "{sender_email}"\n')
@@ -197,6 +207,7 @@ def _save_attachment(
         if cc:
             f.write(f"cc_emails: {cc_emails}\n")
         f.write(f'filename: "{attachment.filename}"\n')
+        f.write(f"file_size: {file_size}\n")
         f.write(f'file_path: "{raw_path}"\n')
         f.write("---\n\n")
         f.write(f"# [첨부] {attachment.filename}\n\n")
@@ -224,7 +235,7 @@ def _strip_disclaimer(text: str) -> str:
     return text.strip()
 
 
-def _collect_mail(client: DaolMailClient, mail: MailSummary, mbox_idx: int) -> str:
+def _collect_mail(client: DaolMailClient, mail: MailSummary, mbox_idx: int, mbox_name: str) -> str:
     """단일 메일 수집 (본문 + 상세 정보 + 첨부파일). 본문 파일 경로 반환."""
     # 본문 수집
     body = client.get_mail_body(mbox_idx, mail.mail_idx)
@@ -243,7 +254,7 @@ def _collect_mail(client: DaolMailClient, mail: MailSummary, mbox_idx: int) -> s
         for att in detail.attachments:
             try:
                 data = client.download_attachment(mbox_idx, mail.mail_idx, att)
-                _save_attachment(mail, mbox_idx, att, data, recipients=recipients, cc=cc)
+                _save_attachment(mail, mbox_idx, mbox_name, att, data, recipients=recipients, cc=cc)
                 attachment_filenames.append(att.filename)
                 logger.info(f"  첨부파일: {att.filename} ({len(data)} bytes)")
                 time.sleep(REQUEST_DELAY)
@@ -256,7 +267,7 @@ def _collect_mail(client: DaolMailClient, mail: MailSummary, mbox_idx: int) -> s
     _save_contacts(mail.sender, recipients, cc, mail.date)
 
     # 본문 마크다운 저장
-    filepath = _save_body_markdown(mail, body, mbox_idx, attachment_filenames, recipients=recipients, cc=cc)
+    filepath = _save_body_markdown(mail, body, mbox_idx, mbox_name, attachment_filenames, recipients=recipients, cc=cc)
     return filepath
 
 
@@ -285,7 +296,7 @@ def _sync_mailbox(client: DaolMailClient, mbox_idx: int, mbox_name: str, full: b
                 continue
 
             try:
-                filepath = _collect_mail(client, mail, mbox_idx)
+                filepath = _collect_mail(client, mail, mbox_idx, mbox_name)
             except Exception as e:
                 logger.warning(f"수집 실패 [{mail.mail_idx}]: {e}")
                 continue

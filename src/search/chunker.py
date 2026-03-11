@@ -127,11 +127,17 @@ def chunk_file(filepath: str) -> list[dict]:
             if source == "notion":
                 chunk_meta["notion_id"] = meta.get("notion_id", "")
                 chunk_meta["url"] = meta.get("url", "")
+                chunk_meta["created_time"] = meta.get("created_time", "")
+                chunk_meta["parent_type"] = meta.get("parent_type", "")
+                chunk_meta["parent_id"] = meta.get("parent_id", "")
             elif source == "daolemail":
                 chunk_meta["mail_idx"] = meta.get("mail_idx", "")
                 chunk_meta["sender"] = meta.get("sender", "")
                 chunk_meta["sender_email"] = meta.get("sender_email", "")
                 chunk_meta["date"] = meta.get("date", "")
+                chunk_meta["direction"] = meta.get("direction", "")
+                chunk_meta["mbox_name"] = meta.get("mbox_name", "")
+                chunk_meta["file_size"] = meta.get("file_size", "")
                 # recipient_emails, cc_emails는 리스트로 저장 (Qdrant 배열 필터용)
                 chunk_meta["recipient_emails"] = _parse_list_field(meta.get("recipient_emails", "[]"))
                 chunk_meta["cc_emails"] = _parse_list_field(meta.get("cc_emails", "[]"))

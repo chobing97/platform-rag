@@ -125,6 +125,7 @@ class SearchFilters:
     sender: str | None = None          # 발신자 이메일
     recipient: str | None = None       # 수신자 이메일 (To+CC)
     participant: str | None = None     # 참여자 이메일 (발신+수신+참조 모두)
+    direction: str | None = None       # sent, received
 
 
 def _build_qdrant_filter(filters: SearchFilters):
@@ -149,6 +150,8 @@ def _build_qdrant_filter(filters: SearchFilters):
             FieldCondition(key="recipient_emails", match=MatchValue(value=filters.participant)),
             FieldCondition(key="cc_emails", match=MatchValue(value=filters.participant)),
         ]))
+    if filters.direction:
+        conditions.append(FieldCondition(key="direction", match=MatchValue(value=filters.direction)))
     return Filter(must=conditions) if conditions else None
 
 
@@ -179,6 +182,8 @@ def _match_bm25_filters(meta: dict, filters: SearchFilters) -> bool:
             all_emails.extend(c_emails)
         if filters.participant not in all_emails:
             return False
+    if filters.direction and meta.get("direction") != filters.direction:
+        return False
     return True
 
 

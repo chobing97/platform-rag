@@ -100,11 +100,20 @@ def sync(full: bool = False):
 
             synced_at = datetime.now(timezone.utc).isoformat()
 
+            created_time = page.get("created_time", "")
+            parent = page.get("parent", {})
+            parent_type = parent.get("type", "")
+            parent_id = parent.get(parent_type, "") if parent_type else ""
+
             frontmatter = [
                 "---",
+                "source: notion",
                 f"title: \"{title}\"",
                 f"notion_id: {page_id}",
+                f"created_time: {created_time}",
                 f"last_edited: {last_edited}",
+                f"parent_type: {parent_type}",
+                f"parent_id: {parent_id}",
                 f"url: {page.get('url', '')}",
                 f"synced_at: {synced_at}",
                 "---",

@@ -49,7 +49,11 @@ server.tool("search_knowledge", "다올투자증권 플랫폼전략팀 지식베
         .string()
         .optional()
         .describe("참여자 이메일로 필터링 (발신+수신+참조 모두)"),
-}, async ({ query, top_k, rerank, source, source_type, sender, recipient, participant }) => {
+    direction: z
+        .string()
+        .optional()
+        .describe("메일 방향 필터 (sent: 보낸 메일, received: 받은 메일)"),
+}, async ({ query, top_k, rerank, source, source_type, sender, recipient, participant, direction }) => {
     const params = new URLSearchParams({
         q: query,
         top_k: String(top_k),
@@ -65,6 +69,8 @@ server.tool("search_knowledge", "다올투자증권 플랫폼전략팀 지식베
         params.set("recipient", recipient);
     if (participant)
         params.set("participant", participant);
+    if (direction)
+        params.set("direction", direction);
     const data = (await apiFetch(`/search?${params}`));
     if (data.count === 0) {
         return {

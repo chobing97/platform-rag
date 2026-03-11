@@ -56,8 +56,12 @@ server.tool(
       .string()
       .optional()
       .describe("참여자 이메일로 필터링 (발신+수신+참조 모두)"),
+    direction: z
+      .string()
+      .optional()
+      .describe("메일 방향 필터 (sent: 보낸 메일, received: 받은 메일)"),
   },
-  async ({ query, top_k, rerank, source, source_type, sender, recipient, participant }) => {
+  async ({ query, top_k, rerank, source, source_type, sender, recipient, participant, direction }) => {
     const params = new URLSearchParams({
       q: query,
       top_k: String(top_k),
@@ -68,6 +72,7 @@ server.tool(
     if (sender) params.set("sender", sender);
     if (recipient) params.set("recipient", recipient);
     if (participant) params.set("participant", participant);
+    if (direction) params.set("direction", direction);
 
     const data = (await apiFetch(`/search?${params}`)) as {
       query: string;

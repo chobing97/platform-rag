@@ -74,6 +74,7 @@ def search_endpoint(
     sender: str | None = Query(None, description="발신자 이메일 주소"),
     recipient: str | None = Query(None, description="수신자 이메일 (To+CC)"),
     participant: str | None = Query(None, description="참여자 이메일 (발신+수신+참조 모두)"),
+    direction: str | None = Query(None, description="메일 방향 필터 (sent, received)"),
 ):
     filters = SearchFilters(
         source=source,
@@ -81,6 +82,7 @@ def search_endpoint(
         sender=sender,
         recipient=recipient,
         participant=participant,
+        direction=direction,
     )
     data = search(q, top_k=top_k, use_reranker=rerank, filters=filters)
     log_search(

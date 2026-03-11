@@ -101,6 +101,7 @@ _PAYLOAD_INDEXES = {
     "sender_email": PayloadSchemaType.KEYWORD,
     "recipient_emails": PayloadSchemaType.KEYWORD,
     "cc_emails": PayloadSchemaType.KEYWORD,
+    "direction": PayloadSchemaType.KEYWORD,
 }
 
 
