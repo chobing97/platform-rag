@@ -4,13 +4,13 @@ import os
 import sqlite3
 from collections import defaultdict
 
-from config import DATA_DIR
+from config import WEB_DIR
 
-DB_PATH = os.path.join(DATA_DIR, "click_log.db")
+DB_PATH = os.path.join(WEB_DIR, "click_log.db")
 
 
 def _get_conn() -> sqlite3.Connection:
-    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(WEB_DIR, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")

@@ -24,7 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-DATA_DIR = os.path.join(PROJECT_ROOT, "data", "daolemail")
+DATA_DIR = os.path.join(PROJECT_ROOT, "data", "raw", "daolemail")
 
 # 기본 메일함
 DEFAULT_MBOXES = {1: "받은메일함", 3: "보낸메일함"}

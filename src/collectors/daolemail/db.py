@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-DB_PATH = os.path.join(PROJECT_ROOT, "data", "sync_state.db")
+DB_PATH = os.path.join(PROJECT_ROOT, "data", "raw", "sync_state.db")
 
 
 def _get_conn() -> sqlite3.Connection:

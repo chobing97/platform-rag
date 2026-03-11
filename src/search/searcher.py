@@ -11,7 +11,8 @@ from qdrant_client import QdrantClient
 from rank_bm25 import BM25Okapi
 
 from config import (
-    DATA_DIR,
+    INDEX_DIR,
+    NOTION_DIR,
     EMBED_MODEL,
     OLLAMA_URL,
     QDRANT_COLLECTION,
@@ -25,7 +26,7 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-BM25_DB = os.path.join(DATA_DIR, "bm25_corpus.db")
+BM25_DB = os.path.join(INDEX_DIR, "bm25_corpus.db")
 
 # 모듈 수준 캐시 — API 서버 기동 시 한 번만 로드
 _bm25_index: BM25Okapi | None = None
@@ -222,10 +223,17 @@ def get_document(doc_id: str) -> dict | None:
     # 원본 마크다운 파일에서 전체 텍스트 읽기
     full_text = point.payload.get("text", "")
     if file_name:
-        file_path = os.path.join(DATA_DIR, "notion", file_name)
-        if os.path.exists(file_path):
-            with open(file_path, "r", encoding="utf-8") as f:
+        # file_path 메타데이터가 있으면 직접 사용, 없으면 NOTION_DIR에서 재귀 탐색
+        meta_file_path = metadata.get("file_path", "")
+        if meta_file_path and os.path.exists(meta_file_path):
+            with open(meta_file_path, "r", encoding="utf-8") as f:
                 full_text = f.read()
+        else:
+            for root, _dirs, fnames in os.walk(NOTION_DIR):
+                if file_name in fnames:
+                    with open(os.path.join(root, file_name), "r", encoding="utf-8") as f:
+                        full_text = f.read()
+                    break
 
     return {"id": doc_id, "text": full_text, "metadata": metadata}
 

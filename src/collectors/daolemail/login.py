@@ -8,7 +8,7 @@ import requests
 
 BASE_URL = "https://groupware.daolsecurities.com"
 LOGIN_URL = f"{BASE_URL}/login.ds"
-COOKIE_PATH = Path(__file__).resolve().parents[3] / "data" / "daolemail_cookies.json"
+COOKIE_PATH = Path(__file__).resolve().parents[3] / "data" / "raw" / "daolemail_cookies.json"
 
 
 def login(user_id: str, password: str) -> dict | None:

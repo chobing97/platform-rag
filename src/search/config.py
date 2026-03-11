@@ -4,8 +4,17 @@ import os
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
-NOTION_DIR = os.path.join(DATA_DIR, "notion")
-DAOLEMAIL_DIR = os.path.join(DATA_DIR, "daolemail")
+
+# 수집 원본 데이터
+RAW_DIR = os.path.join(DATA_DIR, "raw")
+NOTION_DIR = os.path.join(RAW_DIR, "notion")
+DAOLEMAIL_DIR = os.path.join(RAW_DIR, "daolemail")
+
+# 검색 인덱스
+INDEX_DIR = os.path.join(DATA_DIR, "index")
+
+# 웹 UI 데이터
+WEB_DIR = os.path.join(DATA_DIR, "web")
 
 # Qdrant
 QDRANT_URL = "http://localhost:6333"

@@ -19,7 +19,7 @@ from .ocr import process_media_blocks
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-DATA_DIR = os.path.join(PROJECT_ROOT, "data", "notion")
+DATA_DIR = os.path.join(PROJECT_ROOT, "data", "raw", "notion")
 
 
 def _bucket_dir(page_id: str) -> str:

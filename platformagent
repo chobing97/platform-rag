@@ -53,7 +53,7 @@ start_qdrant() {
         info "Qdrant 시작 중..."
         docker start qdrant 2>/dev/null || \
         docker run -d --name qdrant -p 6333:6333 -p 6334:6334 \
-            -v "$ROOT_DIR/data/qdrant_storage:/qdrant/storage" \
+            -v "$ROOT_DIR/data/index/qdrant_storage:/qdrant/storage" \
             qdrant/qdrant
         ok "Qdrant 시작됨 (port 6333)"
     fi
@@ -288,6 +288,11 @@ run_ocr() {
 }
 
 # ─── Migrate ─────────────────────────────────────────
+run_migrate_data() {
+    info "data/ 디렉토리 구조 마이그레이션 (raw/index/web)..."
+    "$ROOT_DIR/scripts/migrate_data_dirs.sh" "$@"
+}
+
 run_migrate_notion() {
     info "Notion 데이터 마이그레이션 (flat → bucket)..."
     cd "$ROOT_DIR/src/collectors"
@@ -411,6 +416,10 @@ case "${1:-help}" in
         shift
         run_ocr "$@"
         ;;
+    migrate-data)
+        shift
+        run_migrate_data "$@"
+        ;;
     migrate-notion)
         shift
         run_migrate_notion "$@"
@@ -440,6 +449,7 @@ case "${1:-help}" in
         echo "  index                                검색 인덱스 재구축 (Qdrant + BM25)"
         echo "  ocr   [--workers N] [--max-size MB]  OCR 텍스트 추출 (Leader-Worker)"
         echo "  sync  [notion|email|all] [--full]   데이터 동기화"
+        echo "  migrate-data [--dry-run]             data/ 디렉토리 구조 마이그레이션"
         echo "  migrate-notion [--dry-run]           Notion 데이터 bucket 구조 마이그레이션"
         echo ""
         ;;

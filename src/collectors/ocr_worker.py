@@ -24,8 +24,8 @@ logging.basicConfig(
 logger = logging.getLogger("ocr_worker")
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-NOTION_DIR = os.path.join(PROJECT_ROOT, "data", "notion")
-DAOLEMAIL_DIR = os.path.join(PROJECT_ROOT, "data", "daolemail")
+NOTION_DIR = os.path.join(PROJECT_ROOT, "data", "raw", "notion")
+DAOLEMAIL_DIR = os.path.join(PROJECT_ROOT, "data", "raw", "daolemail")
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
 PDF_EXTENSIONS = {".pdf"}

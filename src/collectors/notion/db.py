@@ -4,12 +4,12 @@ import os
 import sqlite3
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-DATA_DIR = os.path.join(PROJECT_ROOT, "data")
-DB_PATH = os.path.join(DATA_DIR, "sync_state.db")
+RAW_DIR = os.path.join(PROJECT_ROOT, "data", "raw")
+DB_PATH = os.path.join(RAW_DIR, "sync_state.db")
 
 
 def _get_conn() -> sqlite3.Connection:
-    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(RAW_DIR, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")

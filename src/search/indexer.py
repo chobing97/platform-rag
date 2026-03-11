@@ -12,7 +12,7 @@ from qdrant_client.models import Distance, PointStruct, VectorParams
 
 from chunker import chunk_all
 from config import (
-    DATA_DIR,
+    INDEX_DIR,
     EMBED_DIM,
     EMBED_MODEL,
     OLLAMA_URL,
@@ -22,11 +22,12 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-BM25_DB = os.path.join(DATA_DIR, "bm25_corpus.db")
+BM25_DB = os.path.join(INDEX_DIR, "bm25_corpus.db")
 BATCH_SIZE = 64
 
 
 def _init_bm25_db():
+    os.makedirs(INDEX_DIR, exist_ok=True)
     conn = sqlite3.connect(BM25_DB)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS chunks (
