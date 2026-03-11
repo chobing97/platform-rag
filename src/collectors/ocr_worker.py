@@ -16,6 +16,8 @@ import sys
 import time
 from pathlib import Path
 
+from ocr_db import log_skip
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
@@ -139,6 +141,7 @@ def collect_tasks(max_size_mb: float, source: str = "all") -> list[str]:
                     continue
                 if size > max_size_bytes:
                     logger.info("크기 초과 스킵 (%.1f MB): %s", size / 1024 / 1024, fname)
+                    log_skip(fpath, size, "size_exceeded")
                     continue
 
                 tasks.append(fpath)
@@ -191,8 +194,18 @@ def run(max_workers: int = 5, max_size_mb: float = 10.0, memory_limit: float = 8
                 )
             elif r["status"] == "error":
                 logger.warning("OCR 실패: %s — %s", basename, r.get("error", ""))
+                try:
+                    fsize = os.path.getsize(r["path"])
+                except OSError:
+                    fsize = 0
+                log_skip(r["path"], fsize, "error", r.get("error", ""))
             else:
                 logger.debug("OCR 텍스트 없음: %s", basename)
+                try:
+                    fsize = os.path.getsize(r["path"])
+                except OSError:
+                    fsize = 0
+                log_skip(r["path"], fsize, "empty")
 
         # 새 worker 생성
         while task_idx < len(tasks) and len(active) < max_workers:
@@ -221,18 +234,29 @@ def run(max_workers: int = 5, max_size_mb: float = 10.0, memory_limit: float = 8
         stats[r["status"]] += 1
         stats["total_chars"] += r["chars"]
 
+    # 미투입 작업 기록 (메모리 부족 등으로 루프 종료)
+    skipped_count = len(tasks) - task_idx
+    if skipped_count > 0:
+        logger.warning("메모리 부족으로 %d개 파일 미처리", skipped_count)
+        for fpath in tasks[task_idx:]:
+            try:
+                fsize = os.path.getsize(fpath)
+            except OSError:
+                fsize = 0
+            log_skip(fpath, fsize, "memory_limit")
+
     logger.info(
-        "OCR 완료: 성공 %d, 텍스트없음 %d, 실패 %d (총 %d자 추출)",
-        stats["ok"], stats["empty"], stats["error"], stats["total_chars"],
+        "OCR 완료: 성공 %d, 텍스트없음 %d, 실패 %d, 미처리 %d (총 %d자 추출)",
+        stats["ok"], stats["empty"], stats["error"], skipped_count, stats["total_chars"],
     )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="OCR Leader-Worker")
     parser.add_argument("source", nargs="?", default="all", choices=["notion", "email", "all"], help="대상 소스 (기본: all)")
-    parser.add_argument("--workers", type=int, default=5, help="최대 동시 worker 수 (기본: 5)")
-    parser.add_argument("--max-size", type=float, default=10.0, help="파일 크기 제한 MB (기본: 10)")
-    parser.add_argument("--memory-limit", type=float, default=80.0, help="메모리 사용률 제한 %% (기본: 80)")
+    parser.add_argument("--workers", type=int, default=1, help="최대 동시 worker 수 (기본: 1)")
+    parser.add_argument("--max-size", type=float, default=5.0, help="파일 크기 제한 MB (기본: 5)")
+    parser.add_argument("--memory-limit", type=float, default=50.0, help="메모리 사용률 제한 %% (기본: 50)")
     args = parser.parse_args()
 
     run(max_workers=args.workers, max_size_mb=args.max_size, memory_limit=args.memory_limit, source=args.source)
