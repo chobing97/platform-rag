@@ -197,7 +197,7 @@ def get_chat_messages_endpoint(
     return get_chat_messages(session_id, limit=limit, before_id=before_id)
 
 
-SYNC_STATE_DB = os.path.join(RAW_DIR, "sync_state.db")
+DAOLEMAIL_DB = os.path.join(RAW_DIR, "daolemail", "sync_state.db")
 
 
 @app.get("/contacts")
@@ -206,10 +206,10 @@ def contacts_endpoint(
     limit: int = Query(100, ge=1, le=500, description="결과 수"),
 ):
     """이메일 인물 목록 조회."""
-    if not os.path.exists(SYNC_STATE_DB):
+    if not os.path.exists(DAOLEMAIL_DB):
         return {"contacts": []}
 
-    conn = sqlite3.connect(SYNC_STATE_DB)
+    conn = sqlite3.connect(DAOLEMAIL_DB)
     conn.row_factory = sqlite3.Row
     if keyword:
         rows = conn.execute(
