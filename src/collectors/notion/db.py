@@ -2,6 +2,7 @@
 
 import os
 import sqlite3
+from datetime import datetime, timezone
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 NOTION_DIR = os.path.join(PROJECT_ROOT, "data", "raw", "notion")
@@ -36,6 +37,19 @@ def _get_conn() -> sqlite3.Connection:
     """)
     conn.commit()
     return conn
+
+
+def cleanup_stale_runs(source: str) -> int:
+    """이전에 중단된 'running' 상태의 동기화 기록을 'interrupted'로 정리. 정리 건수 반환."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE sync_log SET status='interrupted', finished_at=? WHERE source=? AND status='running'",
+        (datetime.now(timezone.utc).isoformat(), source),
+    )
+    count = cur.rowcount
+    conn.commit()
+    conn.close()
+    return count
 
 
 def start_sync_run(source: str, started_at: str) -> int:

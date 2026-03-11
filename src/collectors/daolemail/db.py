@@ -44,9 +44,29 @@ def _get_conn() -> sqlite3.Connection:
             synced_mails INTEGER DEFAULT 0,
             error_message TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS sync_cursor (
+            mbox_idx    INTEGER PRIMARY KEY,
+            last_offset INTEGER NOT NULL,
+            total_mails INTEGER NOT NULL,
+            updated_at  TEXT NOT NULL
+        );
     """)
     conn.commit()
     return conn
+
+
+def cleanup_stale_runs() -> int:
+    """이전에 중단된 'running' 상태의 동기화 기록을 'interrupted'로 정리. 정리 건수 반환."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE mail_sync_log SET status='interrupted', finished_at=? WHERE status='running'",
+        (datetime.now(timezone.utc).isoformat(),),
+    )
+    count = cur.rowcount
+    conn.commit()
+    conn.close()
+    return count
 
 
 def get_synced_mail_idxs() -> set[int]:
@@ -145,6 +165,41 @@ def start_sync_run() -> int:
     conn.commit()
     conn.close()
     return run_id
+
+
+def save_sync_cursor(mbox_idx: int, last_offset: int, total_mails: int) -> None:
+    """메일함별 페이지네이션 진행 상태 저장."""
+    conn = _get_conn()
+    conn.execute(
+        """INSERT INTO sync_cursor (mbox_idx, last_offset, total_mails, updated_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(mbox_idx) DO UPDATE SET
+               last_offset=excluded.last_offset,
+               total_mails=excluded.total_mails,
+               updated_at=excluded.updated_at""",
+        (mbox_idx, last_offset, total_mails, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_sync_cursor(mbox_idx: int) -> int | None:
+    """저장된 마지막 offset 반환. 없으면 None."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT last_offset FROM sync_cursor WHERE mbox_idx=?",
+        (mbox_idx,),
+    ).fetchone()
+    conn.close()
+    return row["last_offset"] if row else None
+
+
+def clear_sync_cursors() -> None:
+    """모든 커서 삭제 (동기화 정상 완료 시)."""
+    conn = _get_conn()
+    conn.execute("DELETE FROM sync_cursor")
+    conn.commit()
+    conn.close()
 
 
 def finish_sync_run(

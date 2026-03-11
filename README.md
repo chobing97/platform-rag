@@ -141,6 +141,32 @@ curl -N -X POST http://localhost:8001/agent/ask \
 ./platformagent index --full        # 전체 재인덱싱
 ```
 
+### 크래시 복구 및 재개
+
+수집 중 시스템이 중단되면, **동일 명령어를 다시 실행**하면 자동으로 재개됩니다.
+
+```bash
+# 크래시 후 재실행 — 중단 지점부터 이어서 수집
+./platformagent sync email
+
+# 로그 예시:
+# "이전 중단된 동기화 1건을 'interrupted'로 정리"
+# "이전 중단 지점에서 재개: offset=250/3092"
+```
+
+**증분 (기본) vs `--full` 차이:**
+
+| | 증분 (기본) | `--full` |
+|--|------------|----------|
+| 이메일 | 저장된 커서(offset)부터 재개, 수집 완료된 메일은 스킵 | 커서 삭제 + 전체 메일 처음부터 재수집 |
+| Notion | `page_state.last_edited` 비교 → 변경된 페이지만 수집 | `page_state` 초기화 → 전체 재수집 |
+| 용도 | 일상적인 동기화, 크래시 복구 | frontmatter 형식 변경, 데이터 정합성 재확인 시 |
+
+내부 동작:
+- **sync_log 정리**: 이전에 크래시로 `running` 상태로 남은 기록을 `interrupted`로 자동 전환
+- **Atomic write**: 파일 쓰기 시 `.tmp` → `os.replace()` 패턴으로 불완전 파일 방지
+- **페이지네이션 커서**: 이메일 수집 시 50건 페이지마다 offset을 DB에 저장, 정상 완료 시 삭제
+
 ## 검색 기능
 
 ### Hybrid Search

@@ -9,8 +9,12 @@ import time
 
 from daolemail.client import AttachmentInfo, DaolMailClient, MailSummary
 from daolemail.db import (
+    cleanup_stale_runs,
+    clear_sync_cursors,
     finish_sync_run,
+    get_sync_cursor,
     get_synced_mail_idxs,
+    save_sync_cursor,
     start_sync_run,
     upsert_contact,
     upsert_mail_state,
@@ -114,7 +118,9 @@ def _save_body_markdown(
     recipient_emails = _extract_emails(recipients or [])
     cc_emails = _extract_emails(cc or [])
 
-    with open(filepath, "w", encoding="utf-8") as f:
+    # Atomic write: .tmp → rename (불완전 파일 방지)
+    tmp_path = filepath + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         direction = "sent" if mbox_idx == 3 else "received"
         f.write("---\n")
         f.write(f"source: daolemail\n")
@@ -146,6 +152,7 @@ def _save_body_markdown(
         f.write("---\n\n")
         f.write(body.strip())
         f.write("\n")
+    os.replace(tmp_path, filepath)
 
     return filepath
 
@@ -164,11 +171,13 @@ def _save_attachment(
     attach_dir = os.path.join(bucket, "attachments")
     os.makedirs(attach_dir, exist_ok=True)
 
-    # 원본 파일 저장
+    # 원본 파일 저장 (atomic write)
     safe_name = _sanitize_filename(attachment.filename, max_len=120)
     raw_path = os.path.join(attach_dir, f"{mail.mail_idx}_{safe_name}")
-    with open(raw_path, "wb") as f:
+    tmp_raw = raw_path + ".tmp"
+    with open(tmp_raw, "wb") as f:
         f.write(data)
+    os.replace(tmp_raw, raw_path)
 
     # OCR은 별도 ocr 커맨드로 실행. 기존 sidecar가 있으면 로드.
     extracted_text = ""
@@ -186,11 +195,12 @@ def _save_attachment(
 
     file_size = len(data)
 
-    # 메타데이터 마크다운 (인덱싱용)
+    # 메타데이터 마크다운 (인덱싱용, atomic write)
     md_filename = f"{_sanitize_filename(mail.subject)}_{mail.mail_idx}_att_{safe_name}.md"
     md_path = os.path.join(bucket, md_filename)
+    tmp_md = md_path + ".tmp"
     direction = "sent" if mbox_idx == 3 else "received"
-    with open(md_path, "w", encoding="utf-8") as f:
+    with open(tmp_md, "w", encoding="utf-8") as f:
         f.write("---\n")
         f.write(f"source: daolemail\n")
         f.write(f"content_type: email_attachment\n")
@@ -220,6 +230,7 @@ def _save_attachment(
             f.write("\n")
         else:
             f.write(f"첨부파일: `{attachment.filename}` (OCR 미실행 — `./platformagent ocr` 실행 필요)\n")
+    os.replace(tmp_md, md_path)
 
     return md_path
 
@@ -276,10 +287,19 @@ def _sync_mailbox(client: DaolMailClient, mbox_idx: int, mbox_name: str, full: b
     synced_idxs = set() if full else get_synced_mail_idxs()
     synced_count = 0
 
+    # 총 메일 수 확인 (항상 첫 페이지 호출)
     total_mails, first_page = client.get_mail_list(mbox_idx, PAGE_SIZE, 0)
     logger.info(f"[{mbox_name}] 총 메일 수: {total_mails} (이미 수집: {len(synced_idxs)})")
 
-    offset = 0
+    # 이전 중단 지점에서 재개
+    resume_offset = None if full else get_sync_cursor(mbox_idx)
+    if resume_offset and 0 < resume_offset < total_mails:
+        start_offset = resume_offset
+        logger.info(f"  이전 중단 지점에서 재개: offset={start_offset}/{total_mails}")
+    else:
+        start_offset = 0
+
+    offset = start_offset
     while offset < total_mails:
         if offset == 0:
             mails = first_page
@@ -313,6 +333,8 @@ def _sync_mailbox(client: DaolMailClient, mbox_idx: int, mbox_name: str, full: b
             logger.info(f"수집 [{synced_count}]: [{mail.mail_idx}] {mail.subject}")
 
         offset += PAGE_SIZE
+        # 페이지 완료마다 커서 저장 (크래시 시 이 지점부터 재개)
+        save_sync_cursor(mbox_idx, offset, total_mails)
 
     return total_mails, synced_count
 
@@ -347,7 +369,14 @@ def sync(mbox_idx: int | None = None, full: bool = False) -> None:
         except Exception as e:
             logger.warning(f"사용자 정의 메일함 조회 실패: {e}")
 
-    # 3. 동기화 시작
+    # 3. 이전 중단된 동기화 정리 및 시작
+    stale = cleanup_stale_runs()
+    if stale:
+        logger.warning("이전 중단된 동기화 %d건을 'interrupted'로 정리", stale)
+
+    if full:
+        clear_sync_cursors()  # 전체 재수집 시 커서 초기화
+
     run_id = start_sync_run()
     total_all = 0
     synced_all = 0
@@ -360,6 +389,7 @@ def sync(mbox_idx: int | None = None, full: bool = False) -> None:
             synced_all += synced
 
         finish_sync_run(run_id, total_all, synced_all)
+        clear_sync_cursors()  # 정상 완료 시 커서 정리
         logger.info(f"전체 수집 완료 — {len(mailboxes)}개 메일함, 총 {total_all}건 중 {synced_all}건 신규 수집")
 
     except Exception as e:

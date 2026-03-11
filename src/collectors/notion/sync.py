@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from .client import get_client, get_page_blocks, get_page_comments, list_all_pages
 from .db import (
+    cleanup_stale_runs,
     clear_page_states,
     finish_sync_run,
     get_page_last_edited,
@@ -49,6 +50,11 @@ def sync(full: bool = False):
         full: True이면 모든 페이지를 강제로 재수집한다.
     """
     _setup_logging()
+
+    # 이전에 중단된 동기화 기록 정리
+    stale = cleanup_stale_runs("notion")
+    if stale:
+        logger.warning("이전 중단된 동기화 %d건을 'interrupted'로 정리", stale)
 
     if full:
         logger.info("전체 동기화 모드 — 페이지 상태 초기화")
@@ -127,8 +133,11 @@ def sync(full: bool = False):
             os.makedirs(bucket, exist_ok=True)
             filepath = os.path.join(bucket, filename)
 
-            with open(filepath, "w", encoding="utf-8") as f:
+            # Atomic write: .tmp → rename (불완전 파일 방지)
+            tmp_path = filepath + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 f.write(content)
+            os.replace(tmp_path, filepath)
 
             upsert_page_state(page_id, title, last_edited, filepath, synced_at)
             synced_count += 1
