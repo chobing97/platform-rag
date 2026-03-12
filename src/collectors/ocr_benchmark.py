@@ -146,8 +146,8 @@ def _worker_process(file_path: str, result_queue: mp.Queue):
             for page in result:
                 if not page:
                     continue
-                texts = getattr(page, "rec_texts", [])
-                scores = getattr(page, "rec_scores", [])
+                texts = page.get("rec_texts", []) if isinstance(page, dict) else getattr(page, "rec_texts", [])
+                scores = page.get("rec_scores", []) if isinstance(page, dict) else getattr(page, "rec_scores", [])
                 for text, score in zip(texts, scores):
                     if score > 0.5:
                         chars += len(text)
