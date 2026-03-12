@@ -6,6 +6,7 @@ import time
 
 from dotenv import load_dotenv
 from notion_client import Client
+from notion_client.errors import RequestTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -15,10 +16,17 @@ RETRY_BACKOFF = 2  # 초 (2, 4, 8)
 
 
 def _retry_call(fn, *args, **kwargs):
-    """Notion API 호출을 재시도 가능한 에러(429/5xx)에 대해 exponential backoff으로 재시도."""
+    """Notion API 호출을 재시도 가능한 에러(429/5xx/timeout)에 대해 exponential backoff으로 재시도."""
     for attempt in range(MAX_RETRIES + 1):
         try:
             return fn(*args, **kwargs)
+        except RequestTimeoutError:
+            if attempt < MAX_RETRIES:
+                wait = RETRY_BACKOFF * (2 ** attempt)
+                logger.warning("Notion API 타임아웃 — %d초 후 재시도 (%d/%d)", wait, attempt + 1, MAX_RETRIES)
+                time.sleep(wait)
+            else:
+                raise
         except Exception as e:
             status = getattr(getattr(e, "response", None), "status_code", None) or getattr(e, "status", None)
             if status in RETRYABLE_STATUS and attempt < MAX_RETRIES:
