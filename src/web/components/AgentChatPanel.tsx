@@ -1,11 +1,28 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, type ChangeEvent } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+
+const ACCEPTED_FILE_TYPES = [
+  "image/png", "image/jpeg", "image/gif", "image/webp",
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/vnd.ms-powerpoint",
+].join(",");
+
+interface AttachedFile {
+  file: File;
+  preview?: string; // data URL for images
+}
 
 const AGENT_API_URL = typeof window !== "undefined" ? `http://${window.location.hostname}:8001` : "http://localhost:8001";
 const SEARCH_API_URL = typeof window !== "undefined" ? `http://${window.location.hostname}:8000` : "http://localhost:8000";
 
 const SESSION_KEY = "agent_session_id";
+const TOKEN_KEY = "agent_api_token";
 const PAGE_SIZE = 5;
 
 interface ChatMessage {
@@ -23,11 +40,26 @@ interface StatusEvent {
 
 type ModelsMap = Record<string, string[]>;
 
+function generateUUID(): string {
+  // crypto.randomUUID()는 secure context(HTTPS/localhost)에서만 사용 가능.
+  // LAN IP로 접근 시 fallback 사용.
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  // fallback: crypto.getRandomValues 기반 UUID v4
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 1
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function getOrCreateSessionId(): string {
-  if (typeof window === "undefined") return crypto.randomUUID();
+  if (typeof window === "undefined") return generateUUID();
   const stored = localStorage.getItem(SESSION_KEY);
   if (stored) return stored;
-  const id = crypto.randomUUID();
+  const id = generateUUID();
   localStorage.setItem(SESSION_KEY, id);
   return id;
 }
@@ -53,9 +85,21 @@ export default function AgentChatPanel() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isRestoring, setIsRestoring] = useState(true);
 
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+
+  // API 토큰 설정
+  const [apiToken, setApiToken] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem(TOKEN_KEY) || "";
+  });
+  const [showTokenModal, setShowTokenModal] = useState(false);
+  const [showTokenHelp, setShowTokenHelp] = useState(false);
+  const [tokenInput, setTokenInput] = useState("");
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesAreaRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 모델 목록 로드
   useEffect(() => {
@@ -154,27 +198,58 @@ export default function AgentChatPanel() {
     setSelectedModel(providerModels[0] || "");
   };
 
+  const handleFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    const newFiles: AttachedFile[] = files.map((file) => {
+      const af: AttachedFile = { file };
+      if (file.type.startsWith("image/")) {
+        af.preview = URL.createObjectURL(file);
+      }
+      return af;
+    });
+    setAttachedFiles((prev) => [...prev, ...newFiles]);
+    // reset input so same file can be re-selected
+    e.target.value = "";
+  };
+
+  const removeFile = (index: number) => {
+    setAttachedFiles((prev) => {
+      const removed = prev[index];
+      if (removed.preview) URL.revokeObjectURL(removed.preview);
+      return prev.filter((_, i) => i !== index);
+    });
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const query = input.trim();
     if (!query || isLoading) return;
 
+    const filesToSend = [...attachedFiles];
     setInput("");
-    setMessages((prev) => [...prev, { role: "user", content: query }]);
+    setAttachedFiles([]);
+    setMessages((prev) => [...prev, { role: "user", content: query + (filesToSend.length ? ` [${filesToSend.map((f) => f.file.name).join(", ")}]` : "") }]);
     saveMessage(sessionId, "user", query);
     setStatusEvents([]);
     setIsLoading(true);
 
+    // cleanup previews
+    filesToSend.forEach((f) => { if (f.preview) URL.revokeObjectURL(f.preview); });
+
     try {
+      const formData = new FormData();
+      formData.append("query", query);
+      formData.append("session_id", sessionId);
+      if (selectedProvider) formData.append("provider", selectedProvider);
+      if (selectedModel) formData.append("model", selectedModel);
+      if (apiToken) formData.append("api_key", apiToken);
+      for (const af of filesToSend) {
+        formData.append("files", af.file);
+      }
+
       const res = await fetch(`${AGENT_API_URL}/agent/ask`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query,
-          session_id: sessionId,
-          provider: selectedProvider || undefined,
-          model: selectedModel || undefined,
-        }),
+        body: formData,
       });
 
       if (!res.ok) throw new Error(`API 오류: ${res.status}`);
@@ -253,7 +328,7 @@ export default function AgentChatPanel() {
         }),
       });
     } catch {}
-    const newId = crypto.randomUUID();
+    const newId = generateUUID();
     localStorage.setItem(SESSION_KEY, newId);
     setSessionId(newId);
     setMessages([]);
@@ -266,6 +341,23 @@ export default function AgentChatPanel() {
       e.preventDefault();
       handleSubmit(e);
     }
+  };
+
+  const handleTokenSave = () => {
+    const trimmed = tokenInput.trim();
+    if (trimmed) {
+      localStorage.setItem(TOKEN_KEY, trimmed);
+      setApiToken(trimmed);
+    }
+    setTokenInput("");
+    setShowTokenModal(false);
+  };
+
+  const handleTokenClear = () => {
+    localStorage.removeItem(TOKEN_KEY);
+    setApiToken("");
+    setTokenInput("");
+    setShowTokenModal(false);
   };
 
   const providers = Object.keys(models);
@@ -302,7 +394,145 @@ export default function AgentChatPanel() {
             ))}
           </select>
         )}
+
+        <div className="ml-auto flex items-center gap-1">
+          {/* Token status indicator */}
+          {apiToken && (
+            <span className="text-[10px] text-green-600 bg-green-50 px-1.5 py-0.5 rounded">
+              내 토큰
+            </span>
+          )}
+
+          {/* Token settings button */}
+          <button
+            type="button"
+            onClick={() => { setTokenInput(apiToken); setShowTokenModal(true); }}
+            className={`p-1.5 rounded-lg transition-colors ${
+              apiToken
+                ? "text-green-600 hover:bg-green-50"
+                : "text-gray-400 hover:bg-gray-100"
+            }`}
+            title="API 토큰 설정"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+            </svg>
+          </button>
+        </div>
       </div>
+
+      {/* Token Settings Modal */}
+      {showTokenModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setShowTokenModal(false)}>
+          <div className="bg-white rounded-2xl shadow-xl w-[420px] max-w-[90vw] p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold text-gray-900">API 토큰 설정</h3>
+              <button
+                type="button"
+                onClick={() => setShowTokenHelp(true)}
+                className="text-xs text-blue-500 hover:text-blue-700 flex items-center gap-1"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                토큰 발급 방법
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-500 mb-3">
+              개인 Anthropic API 토큰을 설정하면 서버 토큰 대신 내 토큰으로 요청합니다.
+              설정하지 않으면 서버에 설정된 공용 토큰을 사용합니다.
+            </p>
+
+            <input
+              type="password"
+              value={tokenInput}
+              onChange={(e) => setTokenInput(e.target.value)}
+              placeholder="sk-ant-api... 또는 sk-ant-oat..."
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-4"
+              autoFocus
+              onKeyDown={(e) => { if (e.key === "Enter") handleTokenSave(); }}
+            />
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleTokenSave}
+                disabled={!tokenInput.trim()}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                저장
+              </button>
+              {apiToken && (
+                <button
+                  type="button"
+                  onClick={handleTokenClear}
+                  className="px-4 py-2 text-red-500 text-sm rounded-lg border border-red-200 hover:bg-red-50"
+                >
+                  삭제
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowTokenModal(false)}
+                className="px-4 py-2 text-gray-500 text-sm rounded-lg border border-gray-200 hover:bg-gray-50"
+              >
+                취소
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Token Help Popup */}
+      {showTokenHelp && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30" onClick={() => setShowTokenHelp(false)}>
+          <div className="bg-white rounded-2xl shadow-xl w-[600px] max-w-[90vw] p-6" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-gray-900 mb-3">Claude OAuth 토큰 발급 방법</h3>
+            <p className="text-xs text-gray-500 mb-3">
+              Claude Max/Team/Enterprise 구독자는 CLI를 통해 OAuth 토큰을 발급받아 사용할 수 있습니다.
+            </p>
+            <ol className="text-xs text-gray-600 space-y-2.5 list-decimal list-inside mb-4">
+              <li>
+                터미널에서 Claude Code CLI를 설치합니다:
+                <code className="block bg-gray-100 px-2 py-1 rounded text-[11px] mt-1 ml-4">curl -fsSL https://claude.ai/install.sh | bash</code>
+              </li>
+              <li>
+                로그인하여 OAuth 인증을 완료합니다:
+                <code className="block bg-gray-100 px-2 py-1 rounded text-[11px] mt-1 ml-4">claude setup-token</code>
+                <span className="text-gray-400 ml-4 block mt-0.5">브라우저가 열리면 Claude 계정으로 로그인합니다.</span>
+              </li>
+              <li>
+                발급된 OAuth 토큰을 확인합니다:
+                <code className="block bg-gray-100 px-2 py-1 rounded text-[11px] mt-1 ml-4">
+✓ Long-lived authentication token created successfully!<br/><br/>
+Your OAuth token (valid for 1 year):<br/><br/>
+<span className="text-green-600 font-bold">sk-ant-oat-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</span>  &lt;- 이 토큰을 복사하세요
+                </code>
+                <span className="text-gray-400 ml-4 block mt-0.5">
+                  <code className="bg-gray-100 px-1 rounded text-[11px]">sk-ant-oat...</code> 형식의 토큰을 복사하여 위 입력창에 붙여넣습니다.
+                </span>
+              </li>
+              <li>
+                복사한 토큰을 API 토큰 설정 창에 붙여넣고 저장합니다.
+              </li>
+            </ol>
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+              <p className="text-xs text-amber-700">
+                <strong>참고:</strong> OAuth 토큰은 Claude Max/Team/Enterprise 구독이 필요합니다.
+                토큰을 설정하지 않으면 서버의 공용 토큰을 사용합니다.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowTokenHelp(false)}
+              className="w-full px-4 py-2 bg-gray-100 text-gray-700 text-sm rounded-lg hover:bg-gray-200"
+            >
+              닫기
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Messages Area */}
       <div
@@ -355,9 +585,13 @@ export default function AgentChatPanel() {
                   : "bg-white border border-gray-200 text-gray-900"
               }`}
             >
-              <div className="text-sm leading-relaxed whitespace-pre-wrap">
-                <Linkify text={msg.content} isUser={msg.role === "user"} />
-              </div>
+              {msg.role === "user" ? (
+                <div className="text-sm leading-relaxed whitespace-pre-wrap">
+                  <Linkify text={msg.content} isUser />
+                </div>
+              ) : (
+                <MarkdownContent content={msg.content} />
+              )}
             </div>
           </div>
         ))}
@@ -387,7 +621,53 @@ export default function AgentChatPanel() {
 
       {/* Input Area */}
       <div className="border-t border-gray-200 pt-4">
+        {/* Attached Files Preview */}
+        {attachedFiles.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-2">
+            {attachedFiles.map((af, i) => (
+              <div key={i} className="relative group flex items-center gap-1.5 bg-gray-100 rounded-lg px-2.5 py-1.5 text-xs text-gray-600">
+                {af.preview ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={af.preview} alt={af.file.name} className="h-6 w-6 rounded object-cover" />
+                ) : (
+                  <FileTypeIcon name={af.file.name} />
+                )}
+                <span className="max-w-[120px] truncate">{af.file.name}</span>
+                <button
+                  type="button"
+                  onClick={() => removeFile(i)}
+                  className="ml-0.5 text-gray-400 hover:text-red-500"
+                  title="제거"
+                >
+                  &#x2715;
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <form onSubmit={handleSubmit} className="flex gap-2 items-end">
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept={ACCEPTED_FILE_TYPES}
+            onChange={handleFileSelect}
+            className="hidden"
+          />
+          {/* Attach button */}
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isLoading}
+            className="px-3 py-3 text-gray-400 hover:text-gray-600 disabled:opacity-50 flex-shrink-0"
+            title="파일 첨부 (이미지, PDF, Excel, PPT)"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+            </svg>
+          </button>
           <textarea
             ref={inputRef}
             value={input}
@@ -429,6 +709,46 @@ export default function AgentChatPanel() {
 }
 
 /* ─── Sub Components ──────────────────────────────── */
+
+function MarkdownContent({ content }: { content: string }) {
+  return (
+    <div className="text-sm leading-relaxed prose prose-sm max-w-none prose-headings:mt-3 prose-headings:mb-1 prose-p:my-1.5 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-pre:my-2 prose-blockquote:my-2 prose-hr:my-3 prose-table:my-2">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ href, children }) => (
+            <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline break-all">
+              {children}
+            </a>
+          ),
+          pre: ({ children }) => (
+            <pre className="bg-gray-900 text-green-400 rounded-lg p-3 overflow-x-auto text-xs">{children}</pre>
+          ),
+          code: ({ className, children, ...props }) => {
+            const isBlock = className?.startsWith("language-");
+            if (isBlock) {
+              return <code className={className} {...props}>{children}</code>;
+            }
+            return <code className="bg-gray-100 text-gray-800 px-1 py-0.5 rounded text-xs" {...props}>{children}</code>;
+          },
+          table: ({ children }) => (
+            <div className="overflow-x-auto">
+              <table className="border-collapse border border-gray-300 text-xs w-full">{children}</table>
+            </div>
+          ),
+          th: ({ children }) => (
+            <th className="border border-gray-300 bg-gray-50 px-2 py-1 text-left font-medium">{children}</th>
+          ),
+          td: ({ children }) => (
+            <td className="border border-gray-300 px-2 py-1">{children}</td>
+          ),
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
 
 const URL_REGEX = /(https?:\/\/[^\s<>)"]+)/g;
 
@@ -485,6 +805,20 @@ function ThinkingIndicator({ events }: { events: StatusEvent[] }) {
         </div>
       )}
     </div>
+  );
+}
+
+function FileTypeIcon({ name }: { name: string }) {
+  const ext = name.split(".").pop()?.toLowerCase() || "";
+  let label = "FILE";
+  let color = "bg-gray-400";
+  if (ext === "pdf") { label = "PDF"; color = "bg-red-500"; }
+  else if (["xlsx", "xls"].includes(ext)) { label = "XLS"; color = "bg-green-600"; }
+  else if (["pptx", "ppt"].includes(ext)) { label = "PPT"; color = "bg-orange-500"; }
+  return (
+    <span className={`inline-flex items-center justify-center h-6 w-6 rounded text-[9px] font-bold text-white ${color}`}>
+      {label}
+    </span>
   );
 }
 

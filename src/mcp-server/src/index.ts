@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -109,24 +110,30 @@ function text(t: string) {
   return { content: [{ type: "text" as const, text: t }] };
 }
 
-// ─── MCP 서버 + 도구 등록 ──────────────────────────────
+// ─── MCP 서버 팩토리 (세션별 인스턴스 생성) ──────────────
 
-const server = new McpServer({ name: "platform-rag", version: "0.1.0" });
-
-for (const spec of TOOLS_SPEC) {
-  server.registerTool(
-    spec.name,
-    { description: spec.description, inputSchema: buildZodSchema(spec.parameters) },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (async (input: ToolInput) => {
-      try {
-        const data = await executeApiCall(spec, input);
-        return formatResponse(spec.name, input, data);
-      } catch (err) {
-        return { ...text(`오류: ${String(err)}`), isError: true };
-      }
-    }) as any
-  );
+function createMcpServer(): McpServer {
+  const srv = new McpServer({ name: "platform-rag", version: "0.1.0" });
+  for (const spec of TOOLS_SPEC) {
+    srv.registerTool(
+      spec.name,
+      { description: spec.description, inputSchema: buildZodSchema(spec.parameters) },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (async (input: ToolInput) => {
+        console.error(`[tool:req] ${spec.name} input=${JSON.stringify(input)}`);
+        try {
+          const data = await executeApiCall(spec, input);
+          const response = formatResponse(spec.name, input, data);
+          console.error(`[tool:res] ${spec.name} content=${JSON.stringify(response).slice(0, 2000)}`);
+          return response;
+        } catch (err) {
+          console.error(`[tool:err] ${spec.name} error=${String(err)}`);
+          return { ...text(`오류: ${String(err)}`), isError: true };
+        }
+      }) as any
+    );
+  }
+  return srv;
 }
 
 function formatResponse(name: string, input: ToolInput, data: unknown) {
@@ -202,13 +209,33 @@ function formatResponse(name: string, input: ToolInput, data: unknown) {
   }
 }
 
-// ─── 서버 시작 ────────────────────────────────────────
+// ─── 서버 시작 (세션별 transport + McpServer 관리) ────────
 
 async function main() {
+  // 세션별 transport + 타이머 저장 — 같은 세션의 후속 요청은 같은 transport로 처리
+  const sessions = new Map<string, StreamableHTTPServerTransport>();
+  const sessionTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const SESSION_TTL = 1_800_000; // 30분 (활동 기반 — 요청마다 리셋)
+
+  /** 세션 TTL 타이머를 (재)설정한다. 요청이 올 때마다 호출하여 유휴 시간 기준으로 만료. */
+  function resetSessionTimer(sid: string, transport: StreamableHTTPServerTransport) {
+    const existing = sessionTimers.get(sid);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(() => {
+      console.error(`[session] TTL 만료 (유휴 ${SESSION_TTL / 1000}초): ${sid}`);
+      transport.close();
+      sessions.delete(sid);
+      sessionTimers.delete(sid);
+    }, SESSION_TTL);
+    sessionTimers.set(sid, timer);
+  }
+
   const httpServer = createServer(async (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, mcp-session-id");
+    res.setHeader("Access-Control-Expose-Headers", "mcp-session-id");
 
     if (req.method === "OPTIONS") {
       res.writeHead(204);
@@ -217,10 +244,62 @@ async function main() {
     }
 
     if (req.url === "/mcp") {
+      // HTTP 요청 로깅
+      const sessionId = req.headers["mcp-session-id"] as string | undefined;
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        const body = Buffer.concat(chunks).toString();
+        console.error(`[http:req] ${req.method} session=${sessionId ?? "(new)"} body=${body.slice(0, 3000)}`);
+      });
+
+      // 응답 로깅 — res.write/end 를 래핑
+      const origWrite = res.write.bind(res);
+      const origEnd = res.end.bind(res);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (res as any).write = function (chunk: any, ...args: any[]) {
+        if (chunk) {
+          const s = typeof chunk === "string" ? chunk : chunk.toString();
+          console.error(`[http:res] write session=${sessionId ?? "(new)"} data=${s.slice(0, 3000)}`);
+        }
+        return origWrite(chunk, ...args);
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (res as any).end = function (chunk?: any, ...args: any[]) {
+        if (chunk) {
+          const s = typeof chunk === "string" ? chunk : chunk.toString();
+          console.error(`[http:res] end session=${sessionId ?? "(new)"} data=${s.slice(0, 3000)}`);
+        }
+        return origEnd(chunk, ...args);
+      };
+
       try {
-        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-        await server.close();
-        await server.connect(transport);
+        let transport = sessionId ? sessions.get(sessionId) : undefined;
+
+        if (!transport) {
+          // 새 세션: McpServer + Transport 생성
+          transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => randomUUID(),
+            onsessioninitialized: (sid: string) => {
+              console.error(`[session] 새 세션 초기화: ${sid}`);
+              sessions.set(sid, transport!);
+              resetSessionTimer(sid, transport!);
+
+              transport!.onclose = () => {
+                const t = sessionTimers.get(sid);
+                if (t) clearTimeout(t);
+                sessionTimers.delete(sid);
+                sessions.delete(sid);
+              };
+            },
+          });
+          const srv = createMcpServer();
+          await srv.connect(transport);
+        } else if (sessionId) {
+          // 기존 세션 — 활동이 있으므로 TTL 리셋
+          resetSessionTimer(sessionId, transport);
+        }
+
         await transport.handleRequest(req, res);
       } catch (err) {
         console.error("MCP request error:", err);

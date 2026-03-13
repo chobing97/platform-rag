@@ -193,7 +193,7 @@ export default function DashboardPanel() {
                   tickFormatter={(v: string) => v.slice(5)}
                 />
                 <YAxis tick={{ fontSize: 11 }} unit="s" />
-                <Tooltip formatter={(v: number) => `${v}s`} />
+                <Tooltip formatter={(v) => `${v}s`} />
                 <Line
                   type="monotone"
                   dataKey="avg_total"
@@ -227,8 +227,9 @@ export default function DashboardPanel() {
                   cx="50%"
                   cy="50%"
                   outerRadius={80}
-                  label={({ provider, count }: ProviderRow) =>
-                    `${provider} (${count})`
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  label={(props: any) =>
+                    `${props.provider} (${props.count})`
                   }
                 >
                   {providers.map((_, i) => (

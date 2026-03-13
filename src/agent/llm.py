@@ -36,11 +36,18 @@ class LLMProvider(ABC):
 # ─── Claude (Anthropic) ──────────────────────────────
 
 class ClaudeProvider(LLMProvider):
-    def __init__(self, model: str | None = None):
+    def __init__(self, model: str | None = None, api_key: str | None = None):
         import anthropic
-        if not config.ANTHROPIC_API_KEY:
+        key = api_key or config.ANTHROPIC_API_KEY
+        if not key:
             raise ValueError("ANTHROPIC_API_KEY가 설정되지 않았습니다. agent/.env 파일을 확인하세요.")
-        self.client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+        if key.startswith("sk-ant-oat"):
+            # OAuth 토큰: Bearer 인증 사용. 환경변수 ANTHROPIC_API_KEY에서
+            # api_key도 자동 로드되어 X-Api-Key 헤더가 함께 전송되는 것을 방지.
+            self.client = anthropic.Anthropic(auth_token=key)
+            self.client.api_key = None
+        else:
+            self.client = anthropic.Anthropic(api_key=key)
         self.model = model or config.CLAUDE_MODEL
         self.tools = to_claude_tools()
 
@@ -50,6 +57,10 @@ class ClaudeProvider(LLMProvider):
         response = self.client.messages.create(
             model=self.model,
             max_tokens=config.MAX_TOKENS,
+            extra_headers={
+                "anthropic-beta": "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14"
+            },
+            thinking={"type": "adaptive"},
             system=system_prompt,
             tools=self.tools,
             messages=api_messages,
@@ -79,7 +90,27 @@ def _to_claude_messages(messages: list[dict]) -> list[dict]:
         role = msg["role"]
 
         if role == "user":
-            api_msgs.append({"role": "user", "content": msg["content"]})
+            attachments = msg.get("attachments", [])
+            if not attachments:
+                api_msgs.append({"role": "user", "content": msg["content"]})
+            else:
+                # 멀티모달 메시지: 텍스트 + 첨부파일 블록
+                content_blocks: list[dict] = []
+                for att in attachments:
+                    if att["type"] == "image":
+                        content_blocks.append({
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": att["media_type"], "data": att["data"]},
+                        })
+                    elif att["type"] == "document":
+                        content_blocks.append({
+                            "type": "document",
+                            "source": {"type": "base64", "media_type": att["media_type"], "data": att["data"]},
+                        })
+                    elif att["type"] == "text":
+                        content_blocks.append({"type": "text", "text": att["text"]})
+                content_blocks.append({"type": "text", "text": msg["content"]})
+                api_msgs.append({"role": "user", "content": content_blocks})
 
         elif role == "assistant":
             content_blocks = []
@@ -167,7 +198,18 @@ def _to_gemini_contents(messages: list[dict]) -> list[dict]:
         role = msg["role"]
 
         if role == "user":
-            contents.append(types.Content(role="user", parts=[types.Part.from_text(text=msg["content"])]))
+            parts = []
+            for att in msg.get("attachments", []):
+                if att["type"] == "image":
+                    import base64
+                    parts.append(types.Part.from_bytes(data=base64.b64decode(att["data"]), mime_type=att["media_type"]))
+                elif att["type"] == "document":
+                    import base64
+                    parts.append(types.Part.from_bytes(data=base64.b64decode(att["data"]), mime_type=att["media_type"]))
+                elif att["type"] == "text":
+                    parts.append(types.Part.from_text(text=att["text"]))
+            parts.append(types.Part.from_text(text=msg["content"]))
+            contents.append(types.Content(role="user", parts=parts))
 
         elif role == "assistant":
             parts = []
@@ -194,11 +236,11 @@ def _to_gemini_contents(messages: list[dict]) -> list[dict]:
 
 # ─── 팩토리 ─────────────────────────────────────────
 
-def create_provider(provider: str | None = None, model: str | None = None) -> LLMProvider:
+def create_provider(provider: str | None = None, model: str | None = None, api_key: str | None = None) -> LLMProvider:
     """LLM 프로바이더 인스턴스를 생성한다."""
     provider = provider or config.LLM_PROVIDER
     if provider == "claude":
-        return ClaudeProvider(model=model)
+        return ClaudeProvider(model=model, api_key=api_key)
     elif provider == "gemini":
         return GeminiProvider(model=model)
     else:

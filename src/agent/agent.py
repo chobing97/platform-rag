@@ -1,13 +1,19 @@
 """핵심 에이전트 루프 — 도구 호출 ↔ LLM 반복."""
 
+from __future__ import annotations
+
 import json
 import logging
 from collections.abc import Generator
+from typing import TYPE_CHECKING
 
 from . import config
 from .llm import LLMResponse, create_provider
 from .prompts import get_system_prompt
 from .tools import execute_tool
+
+if TYPE_CHECKING:
+    from .attachments import ContentBlock
 
 logger = logging.getLogger(__name__)
 
@@ -58,25 +64,32 @@ def _error(message: str) -> dict:
 # ─── Agent ────────────────────────────────────────
 
 class Agent:
-    def __init__(self, provider: str | None = None, model: str | None = None):
-        self.llm = create_provider(provider, model=model)
+    def __init__(self, provider: str | None = None, model: str | None = None, api_key: str | None = None):
+        self.llm = create_provider(provider, model=model, api_key=api_key)
         self.system_prompt = get_system_prompt()
         self.conversation: list[dict] = []
 
-    def ask(self, user_input: str) -> str:
+    def ask(self, user_input: str, *, attachments: list[ContentBlock] | None = None) -> str:
         """사용자 질문에 대해 도구를 활용하여 답변한다 (CLI용)."""
         final_text = "(응답 없음)"
-        for event in self.ask_stream(user_input):
+        for event in self.ask_stream(user_input, attachments=attachments):
             if event["type"] == "result":
                 final_text = event["text"]
             elif event["type"] == "error":
                 final_text = f"오류: {event['message']}"
         return final_text
 
-    def ask_stream(self, user_input: str) -> Generator[dict, None, None]:
+    def ask_stream(self, user_input: str, *, attachments: list[ContentBlock] | None = None) -> Generator[dict, None, None]:
         """각 단계를 이벤트로 yield하는 스트리밍 버전."""
-        logger.info("프롬프트 수신: %s", user_input[:80] + ("..." if len(user_input) > 80 else ""))
-        self.conversation.append({"role": "user", "content": user_input})
+        logger.info("프롬프트 수신: %s (첨부 %d건)", user_input[:80] + ("..." if len(user_input) > 80 else ""), len(attachments or []))
+
+        user_msg: dict = {"role": "user", "content": user_input}
+        if attachments:
+            user_msg["attachments"] = [
+                {"type": a.type, "media_type": a.media_type, "data": a.data, "text": a.text, "file_name": a.file_name}
+                for a in attachments
+            ]
+        self.conversation.append(user_msg)
 
         yield _status("질문을 분석하고 있습니다...")
 

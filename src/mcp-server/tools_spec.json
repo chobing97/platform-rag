@@ -1,7 +1,7 @@
 [
   {
     "name": "search_knowledge",
-    "description": "다올투자증권 플랫폼전략팀 지식베이스를 자연어로 검색합니다. 노션 문서, 이메일, 로컬 파일에서 관련 정보를 찾아 출처와 함께 반환합니다. 사용 가능한 필터 값은 get_search_filters 도구로 확인하세요.",
+    "description": "다올투자증권 플랫폼전략팀 지식베이스를 자연어로 검색합니다. Hybrid Search(벡터 + BM25) + Reranker를 사용하여 정확도 높은 결과를 반환합니다.\n\n## 데이터 소스\n지식베이스에는 두 가지 주요 데이터 소스가 있습니다:\n- **notion**: 노션 문서 (프로젝트 문서, 회의록, 설계서 등)\n- **daolemail**: 다올 그룹웨어 이메일 (본문 + 첨부파일 텍스트)\n\n필터 없이 검색하면 모든 소스를 한꺼번에 검색합니다. source 파라미터로 특정 소스만 검색할 수 있습니다.\n\n## 검색 필터 활용법\n\n### source 필터 — 데이터 소스 선택\n- `source=notion` → 노션 문서만 검색\n- `source=daolemail` → 이메일만 검색\n- 생략 → 전체 검색 (노션 + 이메일)\n\n### source_type 필터 — 콘텐츠 유형 선택\n- `source_type=document` → 문서 본문 (노션 문서)\n- `source_type=email_body` → 이메일 본문\n- `source_type=email_attachment` → 이메일 첨부파일에서 추출한 텍스트 (PDF, Excel, HWP 등)\n\n### 이메일 전용 필터\n- `sender=email@example.com` → 특정 발신자가 보낸 메일만\n- `recipient=email@example.com` → 특정 수신자(To+CC)에게 보낸 메일만\n- `participant=email@example.com` → 발신·수신·참조 중 어디든 포함된 메일\n- `direction=sent` → 내가 보낸 메일만 / `direction=received` → 받은 메일만\n\n### 검색 전략 예시\n1. 일반 질문: `search_knowledge(query=\"IBKR 수수료율\")` — 필터 없이 전체 검색\n2. 노션만: `search_knowledge(query=\"프로젝트 일정\", source=\"notion\")` — 노션 문서만\n3. 이메일만: `search_knowledge(query=\"계약서 초안\", source=\"daolemail\")` — 이메일만\n4. 첨부파일: `search_knowledge(query=\"수수료 계약\", source_type=\"email_attachment\")` — 첨부파일 텍스트만\n5. 특정 인물: `search_knowledge(query=\"미팅 일정\", sender=\"hong@daolsecurities.com\")` — 홍길동이 보낸 메일에서\n6. 보낸 메일: `search_knowledge(query=\"보고서\", direction=\"sent\")` — 내가 보낸 메일에서\n\n## 중요 사항\n- 세션 시작 시 반드시 `get_search_filters`를 호출하여 현재 사용 가능한 source/source_type 값을 확인하세요.\n- 인물 관련 검색 시 `list_email_contacts`로 먼저 이메일 주소를 확인한 뒤 sender/recipient/participant 필터에 사용하세요.\n- 결과가 부족하면 필터를 줄이거나 다른 키워드로 재검색하세요.\n- rerank_score가 낮은 결과는 신뢰도가 떨어질 수 있습니다.",
     "api": {
       "method": "GET",
       "path": "/search",
@@ -9,67 +9,67 @@
       "param_rename": { "query": "q" }
     },
     "parameters": [
-      { "name": "query",       "type": "string",  "description": "검색 쿼리 (자연어 질문 또는 키워드)",                           "required": true },
-      { "name": "top_k",       "type": "integer", "description": "반환할 결과 수 (기본 5)",                                      "required": false, "default": 5 },
-      { "name": "rerank",      "type": "boolean", "description": "Reranker 사용 여부 (기본 true)",                               "required": false, "default": true },
-      { "name": "source",      "type": "string",  "description": "데이터 소스 필터 (예: notion, daolemail)",                     "required": false },
-      { "name": "source_type", "type": "string",  "description": "콘텐츠 유형 필터 (예: document, email_body, email_attachment)", "required": false },
-      { "name": "sender",      "type": "string",  "description": "발신자 이메일 주소로 필터링",                                  "required": false },
-      { "name": "recipient",   "type": "string",  "description": "수신자 이메일 주소로 필터링 (To+CC)",                          "required": false },
-      { "name": "participant", "type": "string",  "description": "참여자 이메일로 필터링 (발신+수신+참조 모두)",                  "required": false },
-      { "name": "direction",   "type": "string",  "description": "메일 방향 필터 (sent: 보낸 메일, received: 받은 메일)",         "required": false }
+      { "name": "query",       "type": "string",  "description": "검색 쿼리 (자연어 질문 또는 키워드). 구체적인 키워드일수록 정확도가 높습니다.", "required": true },
+      { "name": "top_k",       "type": "integer", "description": "반환할 결과 수 (기본 5). 중요한 질문은 10으로 늘려 누락을 방지하세요.",       "required": false, "default": 5 },
+      { "name": "rerank",      "type": "boolean", "description": "Reranker 사용 여부 (기본 true). 정확도를 높이려면 true를 유지하세요.",        "required": false, "default": true },
+      { "name": "source",      "type": "string",  "description": "데이터 소스 필터. 값: \"notion\"(노션 문서), \"daolemail\"(이메일). 생략하면 전체 검색.", "required": false },
+      { "name": "source_type", "type": "string",  "description": "콘텐츠 유형 필터. 값: \"document\"(노션 문서), \"email_body\"(이메일 본문), \"email_attachment\"(첨부파일 텍스트). 정확한 값은 get_search_filters로 확인.", "required": false },
+      { "name": "sender",      "type": "string",  "description": "발신자 이메일 주소로 필터링 (정확 일치). 이메일 주소는 list_email_contacts로 먼저 확인하세요.", "required": false },
+      { "name": "recipient",   "type": "string",  "description": "수신자 이메일 주소로 필터링 (To+CC 모두 검색, 정확 일치).",                  "required": false },
+      { "name": "participant", "type": "string",  "description": "참여자 이메일로 필터링 (발신+수신+참조 모두 검색). 특정 인물과 관련된 모든 메일을 찾을 때 사용.", "required": false },
+      { "name": "direction",   "type": "string",  "description": "메일 방향 필터. 값: \"sent\"(보낸 메일), \"received\"(받은 메일).",           "required": false }
     ]
   },
   {
     "name": "get_document",
-    "description": "특정 문서의 전체 내용을 가져옵니다. search_knowledge 결과에서 받은 문서 ID를 사용하세요.",
+    "description": "특정 문서(청크)의 전체 내용과 메타데이터를 가져옵니다. search_knowledge 결과에 포함된 문서 ID를 사용하세요.\n\n검색 결과의 텍스트가 잘려 있거나 전체 맥락이 필요할 때 이 도구로 원문을 확인하세요. 메타데이터에는 제목, 출처, URL, 작성일 등이 포함됩니다.",
     "api": {
       "method": "GET",
       "path": "/document/{doc_id}"
     },
     "parameters": [
-      { "name": "doc_id", "type": "string", "description": "문서(청크) ID", "required": true }
+      { "name": "doc_id", "type": "string", "description": "문서(청크) ID. search_knowledge 결과의 각 항목에 포함된 ID 값을 사용하세요.", "required": true }
     ]
   },
   {
     "name": "list_sources",
-    "description": "지식베이스에 수집된 문서 목록을 조회합니다. 소스 유형이나 키워드로 필터링할 수 있습니다.",
+    "description": "지식베이스에 수집된 문서 목록을 조회합니다. 어떤 문서가 수집되어 있는지 파악하거나, 특정 주제의 문서 존재 여부를 확인할 때 사용하세요.\n\n세션 시작 시 이 도구를 호출하면 지식베이스의 전체 구성을 파악할 수 있습니다. 결과를 기억해두고 사용자 질문에 맞는 검색 전략을 세우는 데 활용하세요.",
     "api": {
       "method": "GET",
       "path": "/sources"
     },
     "parameters": [
-      { "name": "source_type", "type": "string", "description": "소스 유형 필터 (예: notion, email, file)", "required": false },
-      { "name": "keyword",     "type": "string", "description": "제목 키워드 검색",                        "required": false }
+      { "name": "source_type", "type": "string", "description": "소스 유형 필터. 값: \"notion\"(노션 문서), \"daolemail\"(이메일). 생략하면 전체 조회.", "required": false },
+      { "name": "keyword",     "type": "string", "description": "제목 키워드 검색 (부분 일치). 예: \"IBKR\", \"수수료\"",                              "required": false }
     ]
   },
   {
     "name": "get_related",
-    "description": "특정 문서와 의미적으로 관련된 다른 문서들을 찾습니다. 벡터 유사도 기반.",
+    "description": "특정 문서와 의미적으로 유사한 다른 문서들을 벡터 유사도 기반으로 찾습니다.\n\nsearch_knowledge로 찾은 핵심 문서가 있을 때, 그 문서와 관련된 추가 자료를 발견하는 데 유용합니다. 교차 검증이나 추가 맥락이 필요할 때 사용하세요.",
     "api": {
       "method": "GET",
       "path": "/related/{doc_id}"
     },
     "parameters": [
-      { "name": "doc_id", "type": "string",  "description": "기준 문서(청크) ID",              "required": true },
-      { "name": "top_k",  "type": "integer", "description": "반환할 관련 문서 수 (기본 5)", "required": false, "default": 5 }
+      { "name": "doc_id", "type": "string",  "description": "기준 문서(청크) ID. search_knowledge 결과의 ID를 사용하세요.", "required": true },
+      { "name": "top_k",  "type": "integer", "description": "반환할 관련 문서 수 (기본 5).",                               "required": false, "default": 5 }
     ]
   },
   {
     "name": "list_email_contacts",
-    "description": "이메일에 등장하는 인물(발신자/수신자/참조자) 목록을 조회합니다. 이름이나 이메일 주소로 검색할 수 있습니다. 특정 인물의 이메일 주소를 확인한 뒤 search_knowledge의 sender/recipient/participant 필터에 사용하세요.",
+    "description": "이메일에 등장하는 인물(발신자/수신자/참조자) 목록을 조회합니다.\n\n사용자가 특정 인물의 메일을 찾으려 할 때, 먼저 이 도구로 정확한 이메일 주소를 확인한 뒤 search_knowledge의 sender/recipient/participant 필터에 사용하세요.\n\n### 활용 예시\n1. \"김철수가 보낸 메일 찾아줘\" → list_email_contacts(keyword=\"김철수\")로 이메일 주소 확인 → search_knowledge(participant=\"chulsu.kim@daolsecurities.com\")\n2. \"누가 제일 많이 메일 보냈어?\" → list_email_contacts()로 전체 목록 조회 (mail_count 순 정렬됨)",
     "api": {
       "method": "GET",
       "path": "/contacts"
     },
     "parameters": [
-      { "name": "keyword", "type": "string",  "description": "이름 또는 이메일 주소 검색어", "required": false },
-      { "name": "limit",   "type": "integer", "description": "반환할 결과 수 (기본 20)",    "required": false, "default": 20 }
+      { "name": "keyword", "type": "string",  "description": "이름 또는 이메일 주소 검색어 (부분 일치). 예: \"김철수\", \"daolsecurities\"", "required": false },
+      { "name": "limit",   "type": "integer", "description": "반환할 결과 수 (기본 20).",                                                  "required": false, "default": 20 }
     ]
   },
   {
     "name": "get_search_filters",
-    "description": "검색에 사용할 수 있는 필터 옵션(데이터 소스, 콘텐츠 유형)을 조회합니다. search_knowledge의 source, source_type 파라미터에 사용할 값을 확인하세요.",
+    "description": "검색에 사용할 수 있는 필터 옵션(데이터 소스 목록, 콘텐츠 유형 목록)과 각 항목의 문서 수를 조회합니다.\n\n### 반환 정보\n- **sources**: 사용 가능한 데이터 소스와 각 소스의 청크 수 (예: notion 1234건, daolemail 567건)\n- **source_types**: 콘텐츠 유형과 각 유형의 청크 수 (예: document 1500건, email_body 200건, email_attachment 101건)\n\n### 중요: 반드시 세션 초기에 호출하세요\n세션이 시작되면 가장 먼저 이 도구를 호출하여 현재 지식베이스의 구성을 파악하세요. 반환된 source/source_type 값을 기억해두고 search_knowledge 호출 시 적절한 필터를 선택하는 데 활용하세요. 긴 대화 중에는 주기적으로 다시 호출하여 최신 상태를 확인하세요.",
     "api": {
       "method": "GET",
       "path": "/filters"

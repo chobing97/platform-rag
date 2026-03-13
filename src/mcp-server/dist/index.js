@@ -1,276 +1,160 @@
 import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
+const __dirname = dirname(fileURLToPath(import.meta.url));
 const API_URL = process.env.SEARCH_API_URL ?? "http://localhost:8000";
 const MCP_PORT = Number(process.env.MCP_PORT ?? "3001");
-async function apiFetch(path) {
-    const res = await fetch(`${API_URL}${path}`);
-    if (!res.ok) {
-        throw new Error(`API error: ${res.status} ${res.statusText}`);
+const TOOLS_SPEC = JSON.parse(readFileSync(join(__dirname, "../tools_spec.json"), "utf-8"));
+// ─── Zod 스키마 동적 생성 ──────────────────────────────
+function buildZodSchema(params) {
+    const schema = {};
+    for (const p of params) {
+        let base = p.type === "integer" ? z.number().int()
+            : p.type === "boolean" ? z.boolean()
+                : z.string();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const field = p.default !== undefined
+            ? base.default(p.default).describe(p.description)
+            : !p.required
+                ? base.optional().describe(p.description)
+                : base.describe(p.description);
+        schema[p.name] = field;
     }
+    return schema;
+}
+async function executeApiCall(spec, input) {
+    // 1. path param 치환
+    let path = spec.api.path;
+    const pathParams = new Set();
+    for (const key of Object.keys(input)) {
+        if (path.includes(`{${key}}`)) {
+            path = path.replace(`{${key}}`, String(input[key]));
+            pathParams.add(key);
+        }
+    }
+    // 2. 나머지 인자 구성 (path param 제외, null/undefined 제외, rename 적용)
+    const rename = spec.api.param_rename ?? {};
+    const rest = Object.fromEntries(Object.entries(input)
+        .filter(([k, v]) => !pathParams.has(k) && v != null)
+        .map(([k, v]) => [rename[k] ?? k, v]));
+    const url = `${API_URL}${path}`;
+    const method = spec.api.method;
+    let res;
+    if (method === "GET") {
+        const qs = new URLSearchParams(rest).toString();
+        res = await fetch(`${url}${qs ? `?${qs}` : ""}`);
+    }
+    else {
+        res = await fetch(url, {
+            method,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(rest),
+        });
+    }
+    if (!res.ok)
+        throw new Error(`API error: ${res.status} ${res.statusText}`);
     return res.json();
 }
-const server = new McpServer({
-    name: "platform-rag",
-    version: "0.1.0",
-});
-// Tool 1: search_knowledge
-server.tool("search_knowledge", "다올투자증권 플랫폼전략팀 지식베이스를 자연어로 검색합니다. 노션 문서, 이메일, 로컬 파일에서 관련 정보를 찾아 출처와 함께 반환합니다. 사용 가능한 필터 값은 get_search_filters 도구로 확인하세요.", {
-    query: z.string().describe("검색 쿼리 (자연어 질문 또는 키워드)"),
-    top_k: z
-        .number()
-        .int()
-        .min(1)
-        .max(50)
-        .default(5)
-        .describe("반환할 결과 수 (기본 5)"),
-    rerank: z
-        .boolean()
-        .default(true)
-        .describe("Reranker 사용 여부 (기본 true)"),
-    source: z
-        .string()
-        .optional()
-        .describe("데이터 소스 필터 (예: notion, daolemail)"),
-    source_type: z
-        .string()
-        .optional()
-        .describe("콘텐츠 유형 필터 (예: document, email_body, email_attachment)"),
-    sender: z
-        .string()
-        .optional()
-        .describe("발신자 이메일 주소로 필터링"),
-    recipient: z
-        .string()
-        .optional()
-        .describe("수신자 이메일 주소로 필터링 (To+CC)"),
-    participant: z
-        .string()
-        .optional()
-        .describe("참여자 이메일로 필터링 (발신+수신+참조 모두)"),
-    direction: z
-        .string()
-        .optional()
-        .describe("메일 방향 필터 (sent: 보낸 메일, received: 받은 메일)"),
-}, async ({ query, top_k, rerank, source, source_type, sender, recipient, participant, direction }) => {
-    const params = new URLSearchParams({
-        q: query,
-        top_k: String(top_k),
-        rerank: String(rerank),
-    });
-    if (source)
-        params.set("source", source);
-    if (source_type)
-        params.set("source_type", source_type);
-    if (sender)
-        params.set("sender", sender);
-    if (recipient)
-        params.set("recipient", recipient);
-    if (participant)
-        params.set("participant", participant);
-    if (direction)
-        params.set("direction", direction);
-    const data = (await apiFetch(`/search?${params}`));
-    if (data.count === 0) {
-        return {
-            content: [
-                {
-                    type: "text",
-                    text: `"${query}" 검색 결과가 없습니다. 다른 키워드로 다시 검색해 주세요.`,
-                },
-            ],
-        };
+// ─── 응답 포맷 헬퍼 ────────────────────────────────────
+function text(t) {
+    return { content: [{ type: "text", text: t }] };
+}
+// ─── MCP 서버 팩토리 (세션별 인스턴스 생성) ──────────────
+function createMcpServer() {
+    const srv = new McpServer({ name: "platform-rag", version: "0.1.0" });
+    for (const spec of TOOLS_SPEC) {
+        srv.registerTool(spec.name, { description: spec.description, inputSchema: buildZodSchema(spec.parameters) }, 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (async (input) => {
+            try {
+                const data = await executeApiCall(spec, input);
+                return formatResponse(spec.name, input, data);
+            }
+            catch (err) {
+                return { ...text(`오류: ${String(err)}`), isError: true };
+            }
+        }));
     }
-    const resultText = data.results
-        .map((r, i) => {
-        const meta = r.metadata;
-        const source = [
-            meta.title && `제목: ${meta.title}`,
-            meta.source && `출처: ${meta.source}`,
-            meta.file_name && `파일: ${meta.file_name}`,
-            meta.url && `URL: ${meta.url}`,
-            r.rrf_score != null && `RRF: ${r.rrf_score.toFixed(4)}`,
-            r.rerank_score != null && `Rerank: ${r.rerank_score.toFixed(3)}`,
-        ]
-            .filter(Boolean)
-            .join(" | ");
-        return `### [${i + 1}] ${meta.title || "제목 없음"} (ID: ${r.id})\n${source}\n\n${r.text}`;
-    })
-        .join("\n\n---\n\n");
-    const summary = `"${data.query}" 검색 결과 ${data.count}건 (${data.timings.total.toFixed(1)}초)`;
-    return {
-        content: [
-            { type: "text", text: `${summary}\n\n${resultText}` },
-        ],
-    };
-});
-// Tool 2: get_document
-server.tool("get_document", "특정 문서의 전체 내용을 가져옵니다. search_knowledge 결과에서 받은 문서 ID를 사용하세요.", {
-    doc_id: z.string().describe("문서(청크) ID"),
-}, async ({ doc_id }) => {
-    try {
-        const data = (await apiFetch(`/document/${doc_id}`));
-        const meta = Object.entries(data.metadata)
-            .map(([k, v]) => `${k}: ${v}`)
-            .join("\n");
-        return {
-            content: [
-                {
-                    type: "text",
-                    text: `## 문서 메타데이터\n${meta}\n\n## 내용\n${data.text}`,
-                },
-            ],
-        };
+    return srv;
+}
+function formatResponse(name, input, data) {
+    switch (name) {
+        case "search_knowledge": {
+            const d = data;
+            if (d.count === 0)
+                return text(`"${input.query}" 검색 결과가 없습니다. 다른 키워드로 다시 검색해 주세요.`);
+            const resultText = d.results.map((r, i) => {
+                const m = r.metadata;
+                const info = [
+                    m.title && `제목: ${m.title}`,
+                    m.source && `출처: ${m.source}`,
+                    m.file_name && `파일: ${m.file_name}`,
+                    m.url && `URL: ${m.url}`,
+                    r.rrf_score != null && `RRF: ${r.rrf_score.toFixed(4)}`,
+                    r.rerank_score != null && `Rerank: ${r.rerank_score.toFixed(3)}`,
+                ].filter(Boolean).join(" | ");
+                return `### [${i + 1}] ${m.title || "제목 없음"} (ID: ${r.id})\n${info}\n\n${r.text}`;
+            }).join("\n\n---\n\n");
+            return text(`"${d.query}" 검색 결과 ${d.count}건 (${d.timings.total.toFixed(1)}초)\n\n${resultText}`);
+        }
+        case "get_document": {
+            const d = data;
+            const meta = Object.entries(d.metadata).map(([k, v]) => `${k}: ${v}`).join("\n");
+            return text(`## 문서 메타데이터\n${meta}\n\n## 내용\n${d.text}`);
+        }
+        case "list_sources": {
+            const d = data;
+            if (d.sources.length === 0)
+                return text("조건에 맞는 문서가 없습니다.");
+            const list = d.sources
+                .map((s) => `- **${s.title || s.file_name}** (${s.source || "unknown"}, ${s.chunk_count}개 청크)${s.url ? ` [링크](${s.url})` : ""}`)
+                .join("\n");
+            return text(`총 ${d.sources.length}개 문서\n\n${list}`);
+        }
+        case "get_related": {
+            const d = data;
+            if (d.results.length === 0)
+                return text(`문서 "${input.doc_id}"의 관련 문서를 찾을 수 없습니다.`);
+            const list = d.results
+                .map((r, i) => `### [${i + 1}] ${r.metadata.title || "제목 없음"} (ID: ${r.id})\n유사도: ${r.score.toFixed(4)}\n\n${r.text}`)
+                .join("\n\n---\n\n");
+            return text(`관련 문서 ${d.results.length}건\n\n${list}`);
+        }
+        case "list_email_contacts": {
+            const d = data;
+            if (d.contacts.length === 0) {
+                return text(input.keyword ? `"${input.keyword}" 키워드에 해당하는 인물을 찾을 수 없습니다.` : "등록된 이메일 인물이 없습니다.");
+            }
+            const list = d.contacts
+                .map((c) => `- **${c.names.join(" / ") || "(이름 없음)"}** <${c.email}> (${c.mail_count}건)`)
+                .join("\n");
+            return text(`이메일 인물 ${d.contacts.length}명\n\n${list}`);
+        }
+        case "get_search_filters": {
+            const d = data;
+            const sourceList = d.sources.map((s) => `- **${s.value}** (${s.count}건)`).join("\n");
+            const typeList = d.source_types.map((s) => `- **${s.value}** (${s.count}건)`).join("\n");
+            return text(`## 데이터 소스 (source)\n${sourceList || "없음"}\n\n## 콘텐츠 유형 (source_type)\n${typeList || "없음"}`);
+        }
+        default:
+            return { ...text(`알 수 없는 도구: ${name}`), isError: true };
     }
-    catch {
-        return {
-            content: [
-                {
-                    type: "text",
-                    text: `문서 ID "${doc_id}"를 찾을 수 없습니다.`,
-                },
-            ],
-            isError: true,
-        };
-    }
-});
-// Tool 3: list_sources
-server.tool("list_sources", "지식베이스에 수집된 문서 목록을 조회합니다. 소스 유형이나 키워드로 필터링할 수 있습니다.", {
-    source_type: z
-        .string()
-        .optional()
-        .describe("소스 유형 필터 (예: notion, email, file)"),
-    keyword: z.string().optional().describe("제목 키워드 검색"),
-}, async ({ source_type, keyword }) => {
-    const params = new URLSearchParams();
-    if (source_type)
-        params.set("source_type", source_type);
-    if (keyword)
-        params.set("keyword", keyword);
-    const qs = params.toString();
-    const data = (await apiFetch(`/sources${qs ? `?${qs}` : ""}`));
-    if (data.sources.length === 0) {
-        return {
-            content: [
-                { type: "text", text: "조건에 맞는 문서가 없습니다." },
-            ],
-        };
-    }
-    const list = data.sources
-        .map((s) => `- **${s.title || s.file_name}** (${s.source || "unknown"}, ${s.chunk_count}개 청크)${s.url ? ` [링크](${s.url})` : ""}`)
-        .join("\n");
-    return {
-        content: [
-            {
-                type: "text",
-                text: `총 ${data.sources.length}개 문서\n\n${list}`,
-            },
-        ],
-    };
-});
-// Tool 4: get_related
-server.tool("get_related", "특정 문서와 의미적으로 관련된 다른 문서들을 찾습니다. 벡터 유사도 기반.", {
-    doc_id: z.string().describe("기준 문서(청크) ID"),
-    top_k: z
-        .number()
-        .int()
-        .min(1)
-        .max(20)
-        .default(5)
-        .describe("반환할 관련 문서 수 (기본 5)"),
-}, async ({ doc_id, top_k }) => {
-    const data = (await apiFetch(`/related/${doc_id}?top_k=${top_k}`));
-    if (data.results.length === 0) {
-        return {
-            content: [
-                {
-                    type: "text",
-                    text: `문서 "${doc_id}"의 관련 문서를 찾을 수 없습니다.`,
-                },
-            ],
-        };
-    }
-    const list = data.results
-        .map((r, i) => `### [${i + 1}] ${r.metadata.title || "제목 없음"} (ID: ${r.id})\n유사도: ${r.score.toFixed(4)}\n\n${r.text}`)
-        .join("\n\n---\n\n");
-    return {
-        content: [
-            {
-                type: "text",
-                text: `관련 문서 ${data.results.length}건\n\n${list}`,
-            },
-        ],
-    };
-});
-// Tool 5: list_email_contacts
-server.tool("list_email_contacts", "이메일에 등장하는 인물(발신자/수신자/참조자) 목록을 조회합니다. 이름이나 이메일 주소로 검색할 수 있습니다. 특정 인물의 이메일 주소를 확인한 뒤 search_knowledge의 sender/recipient/participant 필터에 사용하세요.", {
-    keyword: z
-        .string()
-        .optional()
-        .describe("이름 또는 이메일 주소 검색어"),
-    limit: z
-        .number()
-        .int()
-        .min(1)
-        .max(500)
-        .default(20)
-        .describe("반환할 결과 수 (기본 20)"),
-}, async ({ keyword, limit }) => {
-    const params = new URLSearchParams();
-    if (keyword)
-        params.set("keyword", keyword);
-    params.set("limit", String(limit));
-    const data = (await apiFetch(`/contacts?${params}`));
-    if (data.contacts.length === 0) {
-        return {
-            content: [
-                {
-                    type: "text",
-                    text: keyword
-                        ? `"${keyword}" 키워드에 해당하는 인물을 찾을 수 없습니다.`
-                        : "등록된 이메일 인물이 없습니다.",
-                },
-            ],
-        };
-    }
-    const list = data.contacts
-        .map((c) => `- **${c.names.join(" / ") || "(이름 없음)"}** <${c.email}> (${c.mail_count}건)`)
-        .join("\n");
-    return {
-        content: [
-            {
-                type: "text",
-                text: `이메일 인물 ${data.contacts.length}명\n\n${list}`,
-            },
-        ],
-    };
-});
-// Tool 6: get_search_filters
-server.tool("get_search_filters", "검색에 사용할 수 있는 필터 옵션(데이터 소스, 콘텐츠 유형)을 조회합니다. search_knowledge의 source, source_type 파라미터에 사용할 값을 확인하세요.", {}, async () => {
-    const data = (await apiFetch("/filters"));
-    const sourceList = data.sources
-        .map((s) => `- **${s.value}** (${s.count}건)`)
-        .join("\n");
-    const typeList = data.source_types
-        .map((s) => `- **${s.value}** (${s.count}건)`)
-        .join("\n");
-    return {
-        content: [
-            {
-                type: "text",
-                text: `## 데이터 소스 (source)\n${sourceList || "없음"}\n\n## 콘텐츠 유형 (source_type)\n${typeList || "없음"}`,
-            },
-        ],
-    };
-});
-// 서버 시작 (Streamable HTTP — stateless: 요청마다 새 transport 생성)
+}
+// ─── 서버 시작 (세션별 transport + McpServer 관리) ────────
 async function main() {
+    // 세션별 transport 저장 — 같은 세션의 후속 요청은 같은 transport로 처리
+    const sessions = new Map();
+    const SESSION_TTL = 600_000; // 10분
     const httpServer = createServer(async (req, res) => {
-        // CORS 헤더
         res.setHeader("Access-Control-Allow-Origin", "*");
         res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
         res.setHeader("Access-Control-Allow-Headers", "Content-Type, mcp-session-id");
+        res.setHeader("Access-Control-Expose-Headers", "mcp-session-id");
         if (req.method === "OPTIONS") {
             res.writeHead(204);
             res.end();
@@ -278,11 +162,30 @@ async function main() {
         }
         if (req.url === "/mcp") {
             try {
-                const transport = new StreamableHTTPServerTransport({
-                    sessionIdGenerator: undefined, // stateless 모드
-                });
-                await server.close();
-                await server.connect(transport);
+                const sessionId = req.headers["mcp-session-id"];
+                let transport = sessionId ? sessions.get(sessionId) : undefined;
+                if (!transport) {
+                    // 새 세션: McpServer + Transport 생성
+                    transport = new StreamableHTTPServerTransport({
+                        sessionIdGenerator: () => randomUUID(),
+                        onsessioninitialized: (sid) => {
+                            console.error(`[session] 새 세션 초기화: ${sid}`);
+                            sessions.set(sid, transport);
+                            // 세션 정리: TTL 후 또는 transport 종료 시
+                            const timer = setTimeout(() => {
+                                console.error(`[session] TTL 만료: ${sid}`);
+                                transport.close();
+                                sessions.delete(sid);
+                            }, SESSION_TTL);
+                            transport.onclose = () => {
+                                clearTimeout(timer);
+                                sessions.delete(sid);
+                            };
+                        },
+                    });
+                    const srv = createMcpServer();
+                    await srv.connect(transport);
+                }
                 await transport.handleRequest(req, res);
             }
             catch (err) {

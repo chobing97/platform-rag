@@ -6,11 +6,12 @@ import SearchBar from "@/components/SearchBar";
 import ResultCard from "@/components/ResultCard";
 import ApiTestPanel from "@/components/ApiTestPanel";
 import McpTestPanel from "@/components/McpTestPanel";
+import McpSetupGuide from "@/components/McpSetupGuide";
 import DashboardPanel from "@/components/DashboardPanel";
 
 const API_URL = typeof window !== "undefined" ? `http://${window.location.hostname}:8000` : "http://localhost:8000";
 
-type Tab = "agent" | "search" | "api" | "mcp" | "dashboard";
+type Tab = "agent" | "search" | "api" | "mcp" | "mcp-setup" | "dashboard";
 
 interface SearchResult {
   id: string;
@@ -86,6 +87,7 @@ export default function Home() {
     { key: "search", label: "검색" },
     { key: "api", label: "API 테스트" },
     { key: "mcp", label: "MCP 테스트" },
+    { key: "mcp-setup", label: "MCP 설정 방법" },
     { key: "dashboard", label: "대시보드" },
   ];
 
@@ -183,6 +185,9 @@ export default function Home() {
 
       {/* MCP Test Tab */}
       {tab === "mcp" && <McpTestPanel />}
+
+      {/* MCP Setup Guide Tab */}
+      {tab === "mcp-setup" && <McpSetupGuide />}
 
       {/* Dashboard Tab */}
       {tab === "dashboard" && <DashboardPanel />}

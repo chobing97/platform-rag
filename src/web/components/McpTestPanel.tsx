@@ -74,16 +74,25 @@ function CopyButton({
 
 async function sendRpc(
   url: string,
-  body: unknown
-): Promise<{ parsed: unknown; raw: string }> {
+  body: unknown,
+  sessionId?: string,
+): Promise<{ parsed: unknown; raw: string; sessionId?: string }> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json, text/event-stream",
+  };
+  if (sessionId) {
+    headers["mcp-session-id"] = sessionId;
+  }
+
   const res = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json, text/event-stream",
-    },
+    headers,
     body: JSON.stringify(body),
   });
+
+  // 응답 헤더에서 세션 ID 추출
+  const respSessionId = res.headers.get("mcp-session-id") ?? undefined;
 
   if (!res.ok) {
     const text = await res.text();
@@ -100,13 +109,13 @@ async function sendRpc(
       .map((l) => l.slice(6));
     const lastData = dataLines[dataLines.length - 1];
     if (lastData) {
-      return { parsed: JSON.parse(lastData), raw: lastData };
+      return { parsed: JSON.parse(lastData), raw: lastData, sessionId: respSessionId };
     }
-    return { parsed: null, raw: text };
+    return { parsed: null, raw: text, sessionId: respSessionId };
   }
 
   const raw = await res.text();
-  return { parsed: JSON.parse(raw), raw };
+  return { parsed: JSON.parse(raw), raw, sessionId: respSessionId };
 }
 
 export default function McpTestPanel() {
@@ -125,6 +134,7 @@ export default function McpTestPanel() {
 
   const rpcIdRef = useRef(1);
   const nextId = () => rpcIdRef.current++;
+  const sessionIdRef = useRef<string | undefined>(undefined);
 
   const addLog = useCallback(
     (direction: "send" | "recv", data: string) => {
@@ -145,7 +155,8 @@ export default function McpTestPanel() {
       const body = { jsonrpc: "2.0", id, method, params };
       addLog("send", JSON.stringify(body, null, 2));
 
-      const { parsed, raw } = await sendRpc(mcpUrl, body);
+      const { parsed, raw, sessionId: sid } = await sendRpc(mcpUrl, body, sessionIdRef.current);
+      if (sid) sessionIdRef.current = sid;
       addLog("recv", JSON.stringify(parsed ?? raw, null, 2));
       return parsed as Record<string, unknown>;
     },
@@ -158,6 +169,7 @@ export default function McpTestPanel() {
     setTools([]);
     setSelectedTool("");
     setToolResult(null);
+    sessionIdRef.current = undefined; // 새 연결 시 세션 초기화
 
     try {
       const initRes = await rpc("initialize", {
@@ -181,12 +193,16 @@ export default function McpTestPanel() {
         params: {},
       };
       addLog("send", JSON.stringify(notifBody, null, 2));
+      const notifHeaders: Record<string, string> = {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      };
+      if (sessionIdRef.current) {
+        notifHeaders["mcp-session-id"] = sessionIdRef.current;
+      }
       await fetch(mcpUrl, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json, text/event-stream",
-        },
+        headers: notifHeaders,
         body: JSON.stringify(notifBody),
       });
       addLog("recv", "(notification accepted)");
@@ -272,7 +288,8 @@ export default function McpTestPanel() {
     try {
       const body = JSON.parse(customRpc);
       addLog("send", JSON.stringify(body, null, 2));
-      const { parsed, raw } = await sendRpc(mcpUrl, body);
+      const { parsed, raw, sessionId: sid } = await sendRpc(mcpUrl, body, sessionIdRef.current);
+      if (sid) sessionIdRef.current = sid;
       const formatted = JSON.stringify(parsed ?? raw, null, 2);
       addLog("recv", formatted);
       setToolResult(formatted);

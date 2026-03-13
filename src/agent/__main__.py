@@ -14,7 +14,7 @@ def _setup_logging():
         "\033[90m[%(asctime)s %(name)s] %(message)s\033[0m",
         datefmt="%H:%M:%S",
     ))
-    for name in ("agent.agent", "agent.llm", "agent.tools"):
+    for name in ("agent.agent", "agent.llm", "agent.tools", "agent.api", "agent.sdk_runner"):
         lg = logging.getLogger(name)
         lg.setLevel(logging.INFO)
         lg.addHandler(handler)

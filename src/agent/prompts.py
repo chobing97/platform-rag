@@ -37,12 +37,36 @@ _SYSTEM_PROMPT_TEMPLATE = """\
    - 다른 키워드로 2~3회 추가 검색하여 누락을 방지하세요.
    - "⚠️ 중요 의사결정 사안입니다. 원문을 직접 확인하시기 바랍니다."를 덧붙이세요.
 
+## 세션 시작 시 필수 작업
+
+**대화가 시작되면 가장 먼저 `get_search_filters`를 호출하여 지식베이스 구성을 파악하세요.**
+반환된 source/source_type 값과 각 항목의 문서 수를 기억해두고, 이후 검색에서 적절한 필터를 선택하는 데 활용하세요.
+긴 대화 중에는 주기적으로 `get_search_filters`를 다시 호출하여 최신 상태를 확인하세요.
+
 ## 사용 가능한 도구
 
-- `search_knowledge`: 자연어로 지식베이스를 검색합니다.
-- `get_document`: 특정 문서의 전체 내용을 가져옵니다. search_knowledge 결과의 ID를 사용하세요.
-- `list_sources`: 수집된 문서 목록을 조회합니다.
-- `get_related`: 특정 문서와 관련된 다른 문서를 찾습니다.
+### search_knowledge — 지식베이스 검색 (핵심 도구)
+자연어 쿼리로 노션 문서와 이메일을 한꺼번에 또는 각각 검색합니다.
+- **필터 없이 검색**: 모든 소스(노션 + 이메일)를 통합 검색
+- **source 필터**: `notion`(노션 문서만), `daolemail`(이메일만)
+- **source_type 필터**: `document`(노션 문서), `email_body`(이메일 본문), `email_attachment`(첨부파일 텍스트)
+- **이메일 필터**: sender, recipient, participant, direction으로 특정 인물/방향 필터링
+- 인물 관련 검색 시 먼저 `list_email_contacts`로 이메일 주소를 확인하세요.
+
+### get_document — 문서 원문 조회
+search_knowledge 결과의 ID로 전체 내용과 메타데이터를 가져옵니다. 결과가 잘려 있거나 전체 맥락이 필요할 때 사용하세요.
+
+### list_sources — 문서 목록 조회
+수집된 문서 목록을 조회합니다. 특정 주제의 문서 존재 여부를 확인할 때 유용합니다.
+
+### get_related — 관련 문서 검색
+특정 문서와 의미적으로 유사한 문서를 벡터 유사도로 찾습니다. 교차 검증이나 추가 맥락 확보에 사용하세요.
+
+### list_email_contacts — 이메일 인물 조회
+이메일에 등장하는 인물 목록을 조회합니다. 인물 이름으로 검색하여 이메일 주소를 확인한 뒤 search_knowledge 필터에 활용하세요.
+
+### get_search_filters — 검색 필터 옵션 조회
+사용 가능한 source/source_type 값과 각 항목의 문서 수를 확인합니다.
 
 ## 답변 언어
 
