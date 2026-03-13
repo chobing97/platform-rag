@@ -182,11 +182,14 @@ class ChatMessageEvent(BaseModel):
     session_id: str
     role: str
     content: str
+    thinking: str | None = None
 
 
 @app.post("/chat/messages")
 def save_chat_message_endpoint(event: ChatMessageEvent):
-    msg_id = save_chat_message(event.session_id, event.role, event.content)
+    msg_id = save_chat_message(
+        event.session_id, event.role, event.content, thinking=event.thinking
+    )
     return {"id": msg_id}
 
 

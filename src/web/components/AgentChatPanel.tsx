@@ -30,6 +30,7 @@ interface ChatMessage {
   id?: number;
   role: "user" | "assistant";
   content: string;
+  thinking?: StatusEvent[];
 }
 
 interface StatusEvent {
@@ -65,11 +66,15 @@ function getOrCreateSessionId(): string {
   return id;
 }
 
-function saveMessage(sessionId: string, role: string, content: string) {
+function saveMessage(sessionId: string, role: string, content: string, thinking?: StatusEvent[]) {
+  const body: Record<string, unknown> = { session_id: sessionId, role, content };
+  if (thinking && thinking.length > 0) {
+    body.thinking = JSON.stringify(thinking);
+  }
   fetch(`${SEARCH_API_URL}/chat/messages`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: sessionId, role, content }),
+    body: JSON.stringify(body),
   }).catch(() => {});
 }
 
@@ -102,6 +107,7 @@ export default function AgentChatPanel() {
   const messagesAreaRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const thinkingEventsRef = useRef<StatusEvent[]>([]);
 
   // 모델 목록 로드
   useEffect(() => {
@@ -123,9 +129,12 @@ export default function AgentChatPanel() {
   useEffect(() => {
     fetch(`${SEARCH_API_URL}/chat/messages/${sessionId}?limit=${PAGE_SIZE}`)
       .then((res) => res.json())
-      .then((data: { messages: ChatMessage[]; has_more: boolean }) => {
+      .then((data: { messages: Array<ChatMessage & { thinking?: string }>; has_more: boolean }) => {
         if (data.messages.length > 0) {
-          setMessages(data.messages);
+          setMessages(data.messages.map((m) => ({
+            ...m,
+            thinking: m.thinking ? JSON.parse(m.thinking) : undefined,
+          })));
           setHasMore(data.has_more);
         }
       })
@@ -167,10 +176,14 @@ export default function AgentChatPanel() {
       const res = await fetch(
         `${SEARCH_API_URL}/chat/messages/${sessionId}?limit=${PAGE_SIZE}&before_id=${oldestId}`
       );
-      const data: { messages: ChatMessage[]; has_more: boolean } = await res.json();
+      const data: { messages: Array<ChatMessage & { thinking?: string }>; has_more: boolean } = await res.json();
       if (data.messages.length > 0) {
+        const parsed = data.messages.map((m) => ({
+          ...m,
+          thinking: m.thinking ? JSON.parse(m.thinking) : undefined,
+        }));
         isPrependingRef.current = true;
-        setMessages((prev) => [...data.messages, ...prev]);
+        setMessages((prev) => [...parsed, ...prev]);
         setHasMore(data.has_more);
         // 스크롤 위치 보정: prepend 후 기존 위치 유지
         requestAnimationFrame(() => {
@@ -235,6 +248,7 @@ export default function AgentChatPanel() {
     setMessages((prev) => [...prev, { role: "user", content: query + (filesToSend.length ? ` [${filesToSend.map((f) => f.file.name).join(", ")}]` : "") }]);
     saveMessage(sessionId, "user", query);
     setStatusEvents([]);
+    thinkingEventsRef.current = [];
     setIsLoading(true);
 
     // cleanup previews
@@ -279,12 +293,15 @@ export default function AgentChatPanel() {
             const data = JSON.parse(line.slice(6));
 
             if (currentEventType === "result") {
+              const capturedThinking = thinkingEventsRef.current.length > 0
+                ? [...thinkingEventsRef.current]
+                : undefined;
               setMessages((prev) => [
                 ...prev,
-                { role: "assistant", content: data.text },
+                { role: "assistant", content: data.text, thinking: capturedThinking },
               ]);
               setStatusEvents([]);
-              saveMessage(sessionId, "assistant", data.text);
+              saveMessage(sessionId, "assistant", data.text, capturedThinking);
               fetch(`${SEARCH_API_URL}/log/chat`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -301,7 +318,9 @@ export default function AgentChatPanel() {
               ]);
               setStatusEvents([]);
             } else {
-              setStatusEvents((prev) => [...prev, data as StatusEvent]);
+              const evt = data as StatusEvent;
+              thinkingEventsRef.current = [...thinkingEventsRef.current, evt];
+              setStatusEvents((prev) => [...prev, evt]);
             }
           }
         }
@@ -594,7 +613,12 @@ Your OAuth token (valid for 1 year):<br/><br/>
                   <Linkify text={msg.content} isUser />
                 </div>
               ) : (
-                <MarkdownContent content={msg.content} />
+                <>
+                  {msg.thinking && msg.thinking.length > 0 && (
+                    <ThinkingToggle events={msg.thinking} />
+                  )}
+                  <MarkdownContent content={msg.content} />
+                </>
               )}
             </div>
           </div>
@@ -786,6 +810,41 @@ function PulsingDot() {
       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
       <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500" />
     </span>
+  );
+}
+
+function ThinkingToggle({ events }: { events: StatusEvent[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mb-2">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-600 transition-colors"
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          className={`h-3 w-3 transition-transform ${open ? "rotate-90" : ""}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+        <span>사고 과정 ({events.length}단계)</span>
+      </button>
+      {open && (
+        <div className="mt-1.5 ml-1 pl-3 border-l-2 border-gray-100 space-y-1">
+          {events.map((evt, i) => (
+            <div key={i} className="flex items-center gap-2 text-xs text-gray-400">
+              <StatusIcon type={evt.type} done />
+              <span>{evt.message}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

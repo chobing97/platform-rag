@@ -52,9 +52,15 @@ def _get_conn() -> sqlite3.Connection:
             session_id TEXT NOT NULL,
             role TEXT NOT NULL,
             content TEXT NOT NULL,
+            thinking TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
     """)
+    # 기존 DB에 thinking 컬럼이 없으면 추가
+    try:
+        conn.execute("SELECT thinking FROM chat_messages LIMIT 0")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE chat_messages ADD COLUMN thinking TEXT")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_chat_messages_session "
         "ON chat_messages(session_id, id DESC)"
@@ -114,11 +120,13 @@ def log_chat(session_id: str, provider: str, model: str = ""):
 
 # ─── 대화 저장/조회 ────────────────────────────────
 
-def save_chat_message(session_id: str, role: str, content: str) -> int:
+def save_chat_message(
+    session_id: str, role: str, content: str, thinking: str | None = None
+) -> int:
     conn = _get_conn()
     cur = conn.execute(
-        "INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?)",
-        (session_id, role, content),
+        "INSERT INTO chat_messages (session_id, role, content, thinking) VALUES (?, ?, ?, ?)",
+        (session_id, role, content, thinking),
     )
     msg_id = cur.lastrowid
     conn.commit()
@@ -132,7 +140,7 @@ def get_chat_messages(
     conn = _get_conn()
     if before_id is not None:
         rows = conn.execute(
-            """SELECT id, session_id, role, content, created_at
+            """SELECT id, session_id, role, content, thinking, created_at
                FROM chat_messages
                WHERE session_id = ? AND id < ?
                ORDER BY id DESC LIMIT ?""",
@@ -140,7 +148,7 @@ def get_chat_messages(
         ).fetchall()
     else:
         rows = conn.execute(
-            """SELECT id, session_id, role, content, created_at
+            """SELECT id, session_id, role, content, thinking, created_at
                FROM chat_messages
                WHERE session_id = ?
                ORDER BY id DESC LIMIT ?""",
