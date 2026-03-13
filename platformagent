@@ -14,6 +14,7 @@
 #   ./platformagent agent-api [start|stop|restart|status]   Agent API 서버 (port 8001)
 #   ./platformagent sync [notion|email|all] [--full]   데이터 동기화
 #   ./platformagent ocr  [notion|email|all] [--workers N]  OCR 텍스트 추출 (Leader-Worker)
+#   ./platformagent increment                          증분 동기화 + 증분 인덱싱 (sync all → index)
 #   ./platformagent index                              검색 인덱스 재구축 (Qdrant + BM25)
 
 set -e
@@ -287,6 +288,18 @@ run_ocr() {
     ok "OCR 텍스트 추출 완료"
 }
 
+# ─── Increment (sync all + index) ────────────────────
+run_increment() {
+    echo ""
+    info "=== 증분 동기화 + 인덱싱 ==="
+    echo ""
+    sync_all
+    echo ""
+    run_index
+    echo ""
+    ok "증분 동기화 + 인덱싱 완료"
+}
+
 # ─── Index ───────────────────────────────────────────
 run_index() {
     info "검색 인덱스 갱신 중..."
@@ -403,6 +416,9 @@ case "${1:-help}" in
         agent/.venv/bin/python -m agent "$@"
         ;;
     agent-api) svc_cmd agent_api "${2:-status}" ;;
+    increment)
+        run_increment
+        ;;
     index)
         shift
         run_index "$@"
@@ -433,6 +449,7 @@ case "${1:-help}" in
         echo "  web   [start|stop|restart|status]   Next.js 검색 UI (port 3000)"
         echo "  agent [--claude|--gemini] [-m MODEL]   AI Agent 대화형 모드"
         echo "  agent-api [start|stop|restart|status]   Agent API 서버 (port 8001)"
+        echo "  increment                            증분 동기화 + 인덱싱 (sync all → index)"
         echo "  index [--full]                       검색 인덱스 갱신 (기본: 증분)"
         echo "  ocr   [notion|email|all] [opts]       OCR 텍스트 추출 (Leader-Worker)"
         echo "  sync  [notion|email|all] [--full]   데이터 동기화"
