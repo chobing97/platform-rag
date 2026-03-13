@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback, type ChangeEvent } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 
 const ACCEPTED_FILE_TYPES = [
@@ -84,6 +85,7 @@ export default function AgentChatPanel() {
   const [hasMore, setHasMore] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isRestoring, setIsRestoring] = useState(true);
+  const isPrependingRef = useRef(false);
 
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
 
@@ -131,11 +133,12 @@ export default function AgentChatPanel() {
       .finally(() => setIsRestoring(false));
   }, [sessionId]);
 
-  // 새 메시지 시 스크롤 아래로 (복원 완료 후에만)
+  // 새 메시지 시 스크롤 아래로 (복원 완료 후에만, 이전 대화 로딩 시 제외)
   useEffect(() => {
-    if (!isRestoring) {
+    if (!isRestoring && !isPrependingRef.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
+    isPrependingRef.current = false;
   }, [messages, statusEvents, isRestoring]);
 
   // 복원 완료 직후 스크롤 아래로 (한 번만)
@@ -166,6 +169,7 @@ export default function AgentChatPanel() {
       );
       const data: { messages: ChatMessage[]; has_more: boolean } = await res.json();
       if (data.messages.length > 0) {
+        isPrependingRef.current = true;
         setMessages((prev) => [...data.messages, ...prev]);
         setHasMore(data.has_more);
         // 스크롤 위치 보정: prepend 후 기존 위치 유지
@@ -714,7 +718,7 @@ function MarkdownContent({ content }: { content: string }) {
   return (
     <div className="text-sm leading-relaxed prose prose-sm max-w-none prose-headings:mt-3 prose-headings:mb-1 prose-p:my-1.5 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-pre:my-2 prose-blockquote:my-2 prose-hr:my-3 prose-table:my-2">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkBreaks]}
         components={{
           a: ({ href, children }) => (
             <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline break-all">
@@ -722,14 +726,15 @@ function MarkdownContent({ content }: { content: string }) {
             </a>
           ),
           pre: ({ children }) => (
-            <pre className="bg-gray-900 text-green-400 rounded-lg p-3 overflow-x-auto text-xs">{children}</pre>
+            <pre className="not-prose bg-[#1e1e2e] rounded-lg p-4 overflow-x-auto my-2 text-[13px] leading-6 [&>code]:bg-transparent [&>code]:p-0 [&>code]:rounded-none [&>code]:text-[#cdd6f4] [&>code]:text-[13px]">
+              {children}
+            </pre>
           ),
           code: ({ className, children, ...props }) => {
-            const isBlock = className?.startsWith("language-");
-            if (isBlock) {
+            if (className?.startsWith("language-")) {
               return <code className={className} {...props}>{children}</code>;
             }
-            return <code className="bg-gray-100 text-gray-800 px-1 py-0.5 rounded text-xs" {...props}>{children}</code>;
+            return <code className="bg-gray-100 text-gray-800 px-1.5 py-0.5 rounded text-xs font-mono" {...props}>{children}</code>;
           },
           table: ({ children }) => (
             <div className="overflow-x-auto">

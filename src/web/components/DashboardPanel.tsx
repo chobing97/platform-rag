@@ -27,6 +27,7 @@ interface Summary {
   today_clicks: number;
   today_chats: number;
   ctr: number;
+  active_sessions: number;
 }
 
 interface DailyRow {
@@ -114,7 +115,7 @@ export default function DashboardPanel() {
   return (
     <div className="space-y-8">
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <KpiCard label="오늘 검색" value={summary.today_searches} unit="건" />
         <KpiCard
           label="클릭률 (CTR)"
@@ -123,6 +124,7 @@ export default function DashboardPanel() {
         />
         <KpiCard label="오늘 채팅" value={summary.today_chats} unit="건" />
         <KpiCard label="이번 주 검색" value={summary.week_searches} unit="건" />
+        <KpiCard label="전체 세션" value={summary.active_sessions} unit="개" />
       </div>
 
       {/* Row 1: Daily + Top Queries */}

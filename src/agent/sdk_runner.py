@@ -71,6 +71,7 @@ class AgentSDKRunner:
             options = ClaudeAgentOptions(
                 resume=self.session_id,
                 mcp_servers=mcp_cfg,
+                permission_mode="bypassPermissions",
             )
         else:
             options = ClaudeAgentOptions(
@@ -129,9 +130,22 @@ class AgentSDKRunner:
 
                 elif isinstance(message, ResultMessage):
                     text = message.result or "(응답 없음)"
-                    logger.info("Agent SDK 답변 수신 (%d자)", len(text))
+                    is_error = getattr(message, "is_error", False)
+                    logger.info(
+                        "Agent SDK 답변 수신 (%d자, is_error=%s)",
+                        len(text), is_error,
+                    )
                     yield {"type": "result", "text": text}
                     got_result = True
+
+                    # 에러 결과(rate limit 등)인 경우 세션 리셋 —
+                    # 손상된 세션을 재사용하면 권한/MCP 연결이 깨짐
+                    if is_error:
+                        logger.warning(
+                            "에러 응답 수신 — 세션 리셋 (error=%s)",
+                            getattr(message, "error", "unknown"),
+                        )
+                        self.session_id = None
 
             if not got_result:
                 yield {"type": "result", "text": "(응답 없음)"}
@@ -140,6 +154,8 @@ class AgentSDKRunner:
             if got_result:
                 # 답변은 이미 전달됨 — CLI 종료 시 에러는 경고로만 기록
                 logger.warning("Agent SDK CLI 종료 에러 (답변은 정상 수신): %s", e)
+                # CLI 비정상 종료 시 세션 상태 불안정 — 리셋
+                self.session_id = None
             else:
                 logger.error("Agent SDK 호출 실패: %s", e)
                 # MCP 연결 실패 가능성 — 세션 리셋하여 다음 요청에서 새로 시작

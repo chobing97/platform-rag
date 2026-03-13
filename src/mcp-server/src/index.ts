@@ -1,7 +1,8 @@
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -11,6 +12,20 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const API_URL = process.env.SEARCH_API_URL ?? "http://localhost:8000";
 const MCP_PORT = Number(process.env.MCP_PORT ?? "3001");
+
+// ─── 로깅 헬퍼 (ISO 타임스탬프 + 소요시간) ──────────────
+
+function ts(): string {
+  return new Date().toISOString();
+}
+
+function log(tag: string, msg: string) {
+  console.error(`${ts()} [${tag}] ${msg}`);
+}
+
+function elapsedMs(start: bigint): string {
+  return ((Number(process.hrtime.bigint() - start)) / 1e6).toFixed(1);
+}
 
 // ─── 도구 스펙 로드 (tools_spec.json이 SSOT) ──────────────
 
@@ -87,11 +102,16 @@ async function executeApiCall(spec: ToolSpec, input: ToolInput): Promise<unknown
 
   const url = `${API_URL}${path}`;
   const method = spec.api.method;
+  const fullUrl = method === "GET"
+    ? `${url}${Object.keys(rest).length ? `?${new URLSearchParams(rest as Record<string, string>)}` : ""}`
+    : url;
+
+  log("api:req", `${method} ${fullUrl}${method !== "GET" ? ` body=${JSON.stringify(rest)}` : ""}`);
+  const start = process.hrtime.bigint();
 
   let res: Response;
   if (method === "GET") {
-    const qs = new URLSearchParams(rest as Record<string, string>).toString();
-    res = await fetch(`${url}${qs ? `?${qs}` : ""}`);
+    res = await fetch(fullUrl);
   } else {
     res = await fetch(url, {
       method,
@@ -100,8 +120,11 @@ async function executeApiCall(spec: ToolSpec, input: ToolInput): Promise<unknown
     });
   }
 
-  if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
-  return res.json();
+  const bodyText = await res.text();
+  log("api:res", `${method} ${path} → ${res.status} (${elapsedMs(start)}ms, ${bodyText.length}B)`);
+
+  if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText} — ${bodyText.slice(0, 500)}`);
+  return JSON.parse(bodyText);
 }
 
 // ─── 응답 포맷 헬퍼 ────────────────────────────────────
@@ -120,14 +143,16 @@ function createMcpServer(): McpServer {
       { description: spec.description, inputSchema: buildZodSchema(spec.parameters) },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (async (input: ToolInput) => {
-        console.error(`[tool:req] ${spec.name} input=${JSON.stringify(input)}`);
+        const toolStart = process.hrtime.bigint();
+        log("tool:req", `${spec.name} input=${JSON.stringify(input)}`);
         try {
           const data = await executeApiCall(spec, input);
           const response = formatResponse(spec.name, input, data);
-          console.error(`[tool:res] ${spec.name} content=${JSON.stringify(response).slice(0, 2000)}`);
+          const resJson = JSON.stringify(response);
+          log("tool:res", `${spec.name} (${elapsedMs(toolStart)}ms, ${resJson.length}B) content=${resJson.slice(0, 3000)}`);
           return response;
         } catch (err) {
-          console.error(`[tool:err] ${spec.name} error=${String(err)}`);
+          log("tool:err", `${spec.name} (${elapsedMs(toolStart)}ms) error=${String(err)}`);
           return { ...text(`오류: ${String(err)}`), isError: true };
         }
       }) as any
@@ -223,7 +248,7 @@ async function main() {
     if (existing) clearTimeout(existing);
 
     const timer = setTimeout(() => {
-      console.error(`[session] TTL 만료 (유휴 ${SESSION_TTL / 1000}초): ${sid}`);
+      log("session", `TTL 만료 (유휴 ${SESSION_TTL / 1000}초): ${sid}`);
       transport.close();
       sessions.delete(sid);
       sessionTimers.delete(sid);
@@ -244,31 +269,66 @@ async function main() {
     }
 
     if (req.url === "/mcp") {
-      // HTTP 요청 로깅
       const sessionId = req.headers["mcp-session-id"] as string | undefined;
-      const chunks: Buffer[] = [];
-      req.on("data", (chunk: Buffer) => chunks.push(chunk));
-      req.on("end", () => {
-        const body = Buffer.concat(chunks).toString();
-        console.error(`[http:req] ${req.method} session=${sessionId ?? "(new)"} body=${body.slice(0, 3000)}`);
-      });
+      const reqStart = process.hrtime.bigint();
 
-      // 응답 로깅 — res.write/end 를 래핑
+      // ── 요청 body를 완전히 버퍼링 (로깅 + transport replay 공용) ──
+      const bodyBuf = await new Promise<Buffer>((resolve) => {
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk: Buffer) => chunks.push(chunk));
+        req.on("end", () => resolve(Buffer.concat(chunks)));
+      });
+      const body = bodyBuf.toString("utf-8");
+
+      // JSON-RPC method 추출 (빠른 디버깅용)
+      let rpcMethod = "";
+      try {
+        const parsed = JSON.parse(body);
+        rpcMethod = parsed.method
+          ?? (Array.isArray(parsed) ? parsed.map((m: { method?: string }) => m.method).join(",") : "");
+      } catch { /* non-JSON body */ }
+      log("http:req", `${req.method} session=${sessionId ?? "(new)"} method=${rpcMethod || "-"} body=${body.slice(0, 3000)}`);
+
+      // ── 버퍼링된 body를 재생할 수 있는 프록시 요청 생성 ──
+      // transport.handleRequest()가 body를 다시 읽을 수 있도록
+      // IncomingMessage의 모든 필수 속성을 복사한다.
+      const readable = Readable.from(bodyBuf);
+      const proxyReq = Object.assign(readable, {
+        method: req.method,
+        url: req.url,
+        headers: req.headers,
+        rawHeaders: req.rawHeaders,
+        httpVersion: req.httpVersion,
+        httpVersionMajor: req.httpVersionMajor,
+        httpVersionMinor: req.httpVersionMinor,
+        socket: req.socket,
+        connection: req.socket,
+        complete: true,
+        aborted: false,
+        trailers: req.trailers,
+        rawTrailers: req.rawTrailers,
+        statusCode: req.statusCode,
+        statusMessage: req.statusMessage,
+      }) as unknown as IncomingMessage;
+
+      // ── 응답 로깅 — res.write/end 래핑 (타이밍 포함) ──
       const origWrite = res.write.bind(res);
       const origEnd = res.end.bind(res);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (res as any).write = function (chunk: any, ...args: any[]) {
         if (chunk) {
-          const s = typeof chunk === "string" ? chunk : chunk.toString();
-          console.error(`[http:res] write session=${sessionId ?? "(new)"} data=${s.slice(0, 3000)}`);
+          const s = typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString("utf-8") : Buffer.from(chunk).toString("utf-8");
+          log("http:res", `write session=${sessionId ?? "(new)"} (${elapsedMs(reqStart)}ms) data=${s.slice(0, 3000)}`);
         }
         return origWrite(chunk, ...args);
       };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (res as any).end = function (chunk?: any, ...args: any[]) {
         if (chunk) {
-          const s = typeof chunk === "string" ? chunk : chunk.toString();
-          console.error(`[http:res] end session=${sessionId ?? "(new)"} data=${s.slice(0, 3000)}`);
+          const s = typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString("utf-8") : Buffer.from(chunk).toString("utf-8");
+          log("http:res", `end session=${sessionId ?? "(new)"} (${elapsedMs(reqStart)}ms) data=${s.slice(0, 3000)}`);
+        } else {
+          log("http:res", `end session=${sessionId ?? "(new)"} (${elapsedMs(reqStart)}ms)`);
         }
         return origEnd(chunk, ...args);
       };
@@ -281,7 +341,7 @@ async function main() {
           transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => randomUUID(),
             onsessioninitialized: (sid: string) => {
-              console.error(`[session] 새 세션 초기화: ${sid}`);
+              log("session", `새 세션 초기화: ${sid} (총 활성 세션: ${sessions.size + 1})`);
               sessions.set(sid, transport!);
               resetSessionTimer(sid, transport!);
 
@@ -300,9 +360,10 @@ async function main() {
           resetSessionTimer(sessionId, transport);
         }
 
-        await transport.handleRequest(req, res);
+        // proxyReq를 전달 — 원본 req의 body는 이미 소비됨
+        await transport.handleRequest(proxyReq, res);
       } catch (err) {
-        console.error("MCP request error:", err);
+        log("http:err", `MCP request error: ${String(err)}`);
         if (!res.headersSent) {
           res.writeHead(500);
           res.end(String(err));
@@ -315,11 +376,11 @@ async function main() {
   });
 
   httpServer.listen(MCP_PORT, "0.0.0.0", () => {
-    console.error(`Platform RAG MCP Server listening on http://0.0.0.0:${MCP_PORT}/mcp`);
+    log("server", `Platform RAG MCP Server listening on http://0.0.0.0:${MCP_PORT}/mcp (API: ${API_URL})`);
   });
 }
 
 main().catch((err) => {
-  console.error("Fatal error:", err);
+  log("fatal", String(err));
   process.exit(1);
 });

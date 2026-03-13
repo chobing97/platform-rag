@@ -106,7 +106,7 @@ start_api() {
         cd "$ROOT_DIR/src/search"
         MECABRC=/opt/homebrew/etc/mecabrc \
             nohup .venv/bin/uvicorn api:app --host 0.0.0.0 --port 8000 \
-            > "$LOG_DIR/api.log" 2>&1 &
+            >> "$LOG_DIR/api.log" 2>&1 &
         sleep 3
         if check_port 8000; then
             ok "FastAPI 시작됨 (port 8000)"
@@ -136,7 +136,7 @@ start_mcp() {
     else
         info "MCP Server 시작 중..."
         cd "$ROOT_DIR/src/mcp-server"
-        nohup node dist/index.js > "$LOG_DIR/mcp.log" 2>&1 &
+        nohup node dist/index.js >> "$LOG_DIR/mcp.log" 2>&1 &
         sleep 2
         if check_port 3001; then
             ok "MCP Server 시작됨 (port 3001)"
@@ -166,7 +166,7 @@ start_web() {
     else
         info "Web UI 시작 중..."
         cd "$ROOT_DIR/src/web"
-        nohup npm run dev > "$LOG_DIR/web.log" 2>&1 &
+        nohup npm run dev >> "$LOG_DIR/web.log" 2>&1 &
         sleep 3
         if check_port 3000; then
             ok "Web UI 시작됨 (port 3000)"
@@ -197,7 +197,7 @@ start_agent_api() {
         info "Agent API 시작 중..."
         cd "$ROOT_DIR/src"
         nohup agent/.venv/bin/python -m agent --serve --port 8001 \
-            > "$LOG_DIR/agent-api.log" 2>&1 &
+            >> "$LOG_DIR/agent-api.log" 2>&1 &
         sleep 3
         if check_port 8001; then
             ok "Agent API 시작됨 (port 8001)"

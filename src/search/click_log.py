@@ -177,6 +177,9 @@ def get_stats_summary() -> dict:
     today_chats = conn.execute(
         "SELECT COUNT(*) c FROM chat_log WHERE date(chatted_at)=date('now')"
     ).fetchone()["c"]
+    active_sessions = conn.execute(
+        "SELECT COUNT(DISTINCT session_id) c FROM chat_messages"
+    ).fetchone()["c"]
     conn.close()
     ctr = round(today_clicks / today_searches, 2) if today_searches > 0 else 0
     return {
@@ -185,6 +188,7 @@ def get_stats_summary() -> dict:
         "today_clicks": today_clicks,
         "today_chats": today_chats,
         "ctr": ctr,
+        "active_sessions": active_sessions,
     }
 
 

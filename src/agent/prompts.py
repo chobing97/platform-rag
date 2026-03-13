@@ -37,6 +37,22 @@ _SYSTEM_PROMPT_TEMPLATE = """\
    - 다른 키워드로 2~3회 추가 검색하여 누락을 방지하세요.
    - "⚠️ 중요 의사결정 사안입니다. 원문을 직접 확인하시기 바랍니다."를 덧붙이세요.
 
+## 도구 병렬 호출 (중요)
+
+**독립적인 도구 호출은 반드시 한 턴에 동시 실행하세요.** 순차 호출하면 응답이 느려집니다.
+
+예시 — "kaspars가 보낸 메일 정리해줘":
+- ✅ 올바름: `get_search_filters` + `list_email_contacts(keyword="kaspars")` + `search_knowledge(query="kaspars")` 를 **한꺼번에** 호출
+- ❌ 잘못됨: `get_search_filters` → 결과 확인 → `list_email_contacts` → 결과 확인 → `search_knowledge` (3턴 낭비)
+
+병렬 호출 대상:
+- `get_search_filters`와 다른 검색 도구 (항상 병렬 가능)
+- `list_email_contacts`와 `search_knowledge` (인물+검색 동시)
+- 여러 키워드 검색 (`search_knowledge`를 다른 쿼리로 동시 호출)
+- `get_document`를 여러 문서 ID에 대해 동시 호출
+
+선행 결과가 필요한 경우만 순차 실행하세요 (예: search → 결과 ID로 get_document).
+
 ## 세션 시작 시 필수 작업
 
 **대화가 시작되면 가장 먼저 `get_search_filters`를 호출하여 지식베이스 구성을 파악하세요.**
